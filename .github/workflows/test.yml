@@ -1,0 +1,28 @@
+name: Simulator tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Audit, test every module with coverage, and build Release
+        env:
+          RESULT_ROOT: ${{ runner.temp }}/SignalKit-results
+        run: |
+          bash Scripts/test-simulator.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-test-results
+          path: |
+            ${{ runner.temp }}/SignalKit-results/TestResults.xcresult
+            ${{ runner.temp }}/SignalKit-results/coverage.json
