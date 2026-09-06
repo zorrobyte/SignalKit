@@ -87,8 +87,20 @@ public final class LocationCoordinator: NSObject {
             guard let h = self?.home else { return nil }
             return (lat: h.lat, lng: h.lng, radius: h.radius)
         },
-        stateStore: EngineStateStore(defaults: stateDefaults)
+        stateStore: EngineStateStore(defaults: stateDefaults),
+        mode: initialTrackingMode
     )
+    private let initialTrackingMode: TrackingMode
+    /// Home-anchored (default) or roaming. Change at runtime with `setTrackingMode(_:)`.
+    public var trackingMode: TrackingMode { engine.mode }
+    /// The coordinate outings are measured from: home, or the roaming base.
+    public var anchorCoordinate: CLLocationCoordinate2D? {
+        engine.anchor.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lng) }
+    }
+    // Roaming: best-effort timer that posts `.tick` when the current stop
+    // reaches the rest threshold while the app is alive. The engine also
+    // re-checks on every event, so a suspended timer only delays the boundary.
+    @ObservationIgnored private var restTimer: Task<Void, Never>?
 
     // Dwell state — surfaced to the host's presentation so it can show at a
     // glance whether iOS thinks the user is stopped somewhere.
@@ -147,7 +159,9 @@ public final class LocationCoordinator: NSObject {
 
     public init(output: TrackingOutput, defaults: UserDefaults, stateDefaults: UserDefaults,
                 motion: MotionCoordinator, log: DiagnosticLog = DiagnosticLog(),
-                precisePurposeKey: String = "preciseForOuting", driver: (any LocationDriving)? = nil) {
+                precisePurposeKey: String = "preciseForOuting", driver: (any LocationDriving)? = nil,
+                mode: TrackingMode = .homeAnchored) {
+        self.initialTrackingMode = mode
         self.output = output
         self.defaults = defaults
         self.stateDefaults = stateDefaults
@@ -177,8 +191,8 @@ public final class LocationCoordinator: NSObject {
     public func bootstrap() {
         guard !didBootstrap else { return }
         didBootstrap = true
-        log.record("location", "bootstrap auth=\(authStatusName)")
-        if let h = home {
+        log.record("location", "bootstrap auth=\(authStatusName) mode=\(trackingMode.isRoaming ? "roaming" : "home")")
+        if let h = home, !trackingMode.isRoaming {
             installGeofence(h)
         }
         if authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse {
@@ -199,7 +213,7 @@ public final class LocationCoordinator: NSObject {
         motion.start()
         engine.bootstrap()
         mirrorEngineState()
-        if home == nil, canGetFix { manager.requestLocation() }
+        if needsInitialFix, canGetFix { manager.requestLocation() }
         Task { await output.flush() }
         // Every delegate event will reschedule too, but call once here so
         // a fresh launch immediately re-arms the dead-man notification
@@ -207,9 +221,47 @@ public final class LocationCoordinator: NSObject {
         onWake?()
     }
 
+    // Home mode wants a first fix to propose a default home; roaming wants one
+    // to adopt the starting rest stop as the base.
+    private var needsInitialFix: Bool {
+        trackingMode.isRoaming ? engine.state.baseLat == nil : home == nil
+    }
+
+    /// Switch between home-anchored and roaming tracking. Any open outing ends
+    /// first. In roaming mode the home fence is released and the current
+    /// position (or the next fix) becomes the base; switching back reinstalls
+    /// the home fence and reconciles against it.
+    public func setTrackingMode(_ mode: TrackingMode) async {
+        guard mode != trackingMode else { return }
+        await engine.handle(.setMode(mode))
+        if mode.isRoaming {
+            if let r = homeRegion { manager.stopMonitoring(for: r); homeRegion = nil }
+            if let l = lastSample, isAcceptableFix(l) {
+                await engine.handle(.sample(lat: l.coordinate.latitude, lng: l.coordinate.longitude,
+                                            speed: nil, at: l.timestamp))
+            } else if canGetFix {
+                manager.requestLocation()
+            }
+        } else if let h = home {
+            installGeofence(h)
+        }
+        log.record("mode", mode.isRoaming ? "roaming" : "home")
+        mirrorEngineState()
+        await output.flush()
+    }
+
+    /// Re-evaluate time-based state with no new sensor data: in roaming mode a
+    /// stop that has reached the rest threshold ends the outing. Call from a
+    /// background refresh task or on foreground entry. Cheap in every mode.
+    public func refreshTrackingState() async {
+        await engine.handle(.tick(at: Date()))
+        await output.flush()
+    }
+
     // Copy the engine's current phase/dwell into the observable mirror that the
     // Today diagnostics card renders. Called after each forwarded signal.
     private func mirrorEngineState() {
+        scheduleRestTimer()
         enginePhase = engine.state.phase
         isDwelling = engine.state.phase == .onSite
         dwellingSince = engine.state.dwellSince
@@ -238,6 +290,20 @@ public final class LocationCoordinator: NSObject {
             onSnapshot?()
         }
         onStateChanged?()
+    }
+
+    private func scheduleRestTimer() {
+        restTimer?.cancel()
+        restTimer = nil
+        guard let threshold = trackingMode.restThreshold, engine.state.phase == .onSite,
+              let since = engine.state.dwellSince else { return }
+        let delay = max(0, threshold - Date().timeIntervalSince(since))
+        restTimer = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            await self.engine.handle(.tick(at: Date()))
+            await self.output.flush()
+        }
     }
 
     private func highAccuracyGPSDidChange() {
@@ -367,7 +433,7 @@ public final class LocationCoordinator: NSObject {
         }
         if source == "continuous" { lastKeptContinuous = location }
         self.lastSample = location
-        if Self.isLiveFixSource(source),
+        if Self.isLiveFixSource(source), !trackingMode.isRoaming,
            HomeDefaultPolicy.shouldSetHome(existingHome: home != nil,
                                            preciseAuthorization: accuracyStatus == .fullAccuracy, fix: location) {
             saveHome(location)
@@ -385,8 +451,8 @@ public final class LocationCoordinator: NSObject {
                 speed: spd, at: location.timestamp
             ))
         }
-        if let h = home {
-            let d = distance(h.lat, h.lng, location.coordinate.latitude, location.coordinate.longitude)
+        if let a = engine.anchor {
+            let d = distance(a.lat, a.lng, location.coordinate.latitude, location.coordinate.longitude)
             onDistanceChanged?(d)
             let minGap: TimeInterval = continuousActive ? 5 : 0
             if Date().timeIntervalSince(lastSnapshotPublishAt) >= minGap {
@@ -500,9 +566,10 @@ extension LocationCoordinator: CLLocationManagerDelegate {
             if authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse {
                 manager.startMonitoringSignificantLocationChanges()
                 manager.startMonitoringVisits()
-                if let h = home {
+                if let h = home, !trackingMode.isRoaming {
                     installGeofence(h)
-                } else {
+                }
+                if needsInitialFix {
                     manager.requestLocation()
                 }
             }
@@ -574,8 +641,8 @@ extension LocationCoordinator: CLLocationManagerDelegate {
                 let c = lastSample?.coordinate
                 log.record("geofence", "exited dwell")
                 await engine.handle(.dwellExit(
-                    lat: c?.latitude ?? home?.lat ?? 0,
-                    lng: c?.longitude ?? home?.lng ?? 0,
+                    lat: c?.latitude ?? engine.anchor?.lat ?? 0,
+                    lng: c?.longitude ?? engine.anchor?.lng ?? 0,
                     at: Date()
                 ))
             }
@@ -603,8 +670,8 @@ extension LocationCoordinator: CLLocationManagerDelegate {
                 let c = lastSample?.coordinate
                 log.record("geofence.state", "dwell outside on boot → exit")
                 await engine.handle(.dwellExit(
-                    lat: c?.latitude ?? home?.lat ?? 0,
-                    lng: c?.longitude ?? home?.lng ?? 0,
+                    lat: c?.latitude ?? engine.anchor?.lat ?? 0,
+                    lng: c?.longitude ?? engine.anchor?.lng ?? 0,
                     at: Date()
                 ))
                 await output.flush()

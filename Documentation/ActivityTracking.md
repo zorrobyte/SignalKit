@@ -1,6 +1,6 @@
 # ActivityTracking integration
 
-Retain one `LocationCoordinator` and one `MotionCoordinator` per active tracker. Construct them during app initialization so background location launches register a delegate promptly. Supply ordinary app defaults for settings and a separate defaults suite/App Group for durable engine state. The host chooses the home coordinate and can preserve/change it with the public coordinator APIs.
+Retain one `LocationCoordinator` and one `MotionCoordinator` per active tracker. Construct them during app initialization so background location launches register a delegate promptly. Supply ordinary app defaults for settings and a separate defaults suite/App Group for durable engine state. In the default home-anchored mode the host chooses the home coordinate and can preserve/change it with the public coordinator APIs. Pass `mode: .roaming()` for users who work from the road and have no fixed home; see [Tracking modes](#tracking-modes).
 
 ```swift
 let motion = MotionCoordinator() // diagnostics default to no-op
@@ -18,6 +18,19 @@ location.bootstrap()
 // From a user-facing permissions flow:
 location.requestAuthorization()
 ```
+
+## Tracking modes
+
+`homeAnchored` (default) suits someone whose day is organized around leaving and returning to one place: an outing is the time away from the home geofence. `roaming` suits a truck driver, a traveling nurse, or anyone who wants all movement tracked without a home. There, an outing begins when the device departs (vehicle motion, a fast fix, or leaving the rest fence) and ends once a stop has lasted the rest threshold; that stop becomes the base for the next outing. Shorter stops are dwell segments inside the outing.
+
+```swift
+let location = LocationCoordinator(output: yourTrackingOutput, defaults: appDefaults,
+    stateDefaults: trackingStateDefaults, motion: motion, mode: .roaming(restThreshold: 6 * 3600))
+// A user setting can flip it later; any open outing ends first.
+await location.setTrackingMode(.homeAnchored)
+```
+
+The rest threshold is evaluated lazily on every engine event and by a best-effort timer while the app is alive. Call `refreshTrackingState()` from a background refresh task or on foreground entry so a rest that completed while suspended is recognized promptly; otherwise the boundary is recognized at the next location or motion event. The first roaming outing may carry a nil `homeLat/homeLng` when no fix arrived before departure. Because the two modes never share an anchor, switching discards the roaming base; the host owns persisting the user's choice and passing it at the next launch.
 
 ## Your TrackingOutput implementation
 

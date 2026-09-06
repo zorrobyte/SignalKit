@@ -4,7 +4,7 @@ Reusable, backend-independent Swift libraries for iOS 17+ collection and durable
 
 | Product | Owns | Does not own |
 | --- | --- | --- |
-| `ActivityTracking` | CoreLocation, CoreMotion, home/dwell geofences, outing/segment state machine, state persistence | Identity, server APIs, widgets, Live Activities, notifications |
+| `ActivityTracking` | CoreLocation, CoreMotion, home-anchored or roaming outing detection, dwell geofences, outing/segment state machine, state persistence | Identity, server APIs, widgets, Live Activities, notifications |
 | `HealthSync` | Configurable daily metrics, native HealthKit readers, type catalog, change reconciliation, durable health outbox | Your permission selection, backend schema, medical interpretation |
 | `DurableSync` | Generic JSONL outbox, FIFO replay, bounded drains, optional compaction/batching, timeout helper | Domain events, networking, credentials |
 
@@ -15,7 +15,7 @@ There are no external package dependencies. Logging is opt-in through an injecte
 Add `https://github.com/zorrobyte/SignalKit.git` in Xcode's Package Dependencies, then select the products your app needs. Licensed under MIT.
 
 ```swift
-.package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.3.0")
+.package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.4.0")
 // In a target's dependencies:
 .product(name: "HealthSync", package: "SignalKit")
 ```

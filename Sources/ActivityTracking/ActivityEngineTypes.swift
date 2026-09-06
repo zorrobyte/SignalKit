@@ -54,6 +54,23 @@ public enum SamplingPolicy {
     }
 }
 
+// ─── Tracking mode ───────────────────────────────────────────────────
+/// How the engine decides where an outing begins and ends.
+public enum TrackingMode: Equatable, Sendable {
+    /// Outings are bounded by a fixed home geofence: leaving home starts one,
+    /// returning ends it. Requires a home. This is the default.
+    case homeAnchored
+    /// No fixed home; track all movement. An outing starts when the device
+    /// departs (vehicle motion, a fast fix, or leaving the current rest
+    /// fence) and ends once a stop has lasted `restThreshold`. That rest stop
+    /// becomes the anchor ("base") for the next outing's distance and start
+    /// coordinate. Intended for people working from the road.
+    case roaming(restThreshold: TimeInterval = 4 * 3600)
+
+    public var isRoaming: Bool { if case .roaming = self { return true } else { return false } }
+    public var restThreshold: TimeInterval? { if case let .roaming(t) = self { return t } else { return nil } }
+}
+
 // ─── The control seam ────────────────────────────────────────────────
 // The engine commands the radio through this. LocationCoordinator implements
 // it for real; tests use a fake that records the call sequence.
@@ -133,6 +150,11 @@ public struct EngineState: Codable, Equatable, Sendable {
     public var maxDistanceMeters: Double = 0
     public var lastPersonalRecord: Double = 0
     public var farRecordFlagged: Bool = false
+
+    // Roaming mode only: the last confirmed rest stop, which anchors the next
+    // outing. Absent in home-anchored mode and before the first rest/fix.
+    public var baseLat: Double?
+    public var baseLng: Double?
 }
 
 // App Group persistence for EngineState.

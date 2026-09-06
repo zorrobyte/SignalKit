@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Add `TrackingMode`: `.homeAnchored` (default, unchanged behavior) or `.roaming(restThreshold:)` for users without a fixed home. Roaming outings start on vehicle motion, a fast fix, or leaving the rest fence, and end once a stop lasts the threshold; that stop becomes the base for the next outing.
+- `LocationCoordinator.init` and `ActivityEngine.init`/`live` take `mode:`; `setTrackingMode(_:)`/`Event.setMode` switch at runtime; `refreshTrackingState()`/`Event.tick` re-evaluate the rest threshold; `anchorCoordinate`/`ActivityEngine.anchor` expose the measuring point.
+- `EngineState` gains optional `baseLat`/`baseLng`; `startOuting` may receive a nil home in roaming mode; new outing `source` value `roaming`.
+
 ## 0.3.0
 
 - Compile cleanly in the Swift 6 language mode with complete concurrency checking; CI now enforces this.

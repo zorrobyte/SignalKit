@@ -55,6 +55,8 @@ final class FakeBackend: TrackingOutput {
     var farRecords: [String] = []
     var farthest: Double = 0
     var sessions: [String] = []
+    var outingAnchors: [(lat: Double?, lng: Double?)] = []
+    var outingSources: [String] = []
     func startSession(clientOutingId: String, at: Date) async -> String? {
         sessions.append(clientOutingId)
         outings.append(Outing(clientId: clientOutingId, mode: "session", endedAt: nil))
@@ -64,6 +66,8 @@ final class FakeBackend: TrackingOutput {
     private func nextId(_ p: String) -> String { seq += 1; return "\(p)\(seq)" }
 
     func startOuting(clientOutingId: String, mode: String, source: String, at: Date, homeLat: Double?, homeLng: Double?) async -> String? {
+        outingAnchors.append((homeLat, homeLng))
+        outingSources.append(source)
         // Idempotent on clientOutingId (mirrors the real upsert).
         if !outings.contains(where: { $0.clientId == clientOutingId }) {
             outings.append(Outing(clientId: clientOutingId, mode: mode, endedAt: nil))

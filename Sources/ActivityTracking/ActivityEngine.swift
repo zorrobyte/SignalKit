@@ -32,6 +32,11 @@ public final class ActivityEngine {
         // modeled as a synthetic leave/return so they reuse the same transitions.
         case manualStart(at: Date)
         case manualEnd(at: Date)
+        // Roaming mode: re-evaluate the rest threshold without new sensor data
+        // (a background task, foreground entry, or the coordinator's timer).
+        case tick(at: Date)
+        // Switch tracking modes at runtime. Ends any open outing first.
+        case setMode(TrackingMode)
     }
     private var queue: [Event] = []
     private var pumpTask: Task<Void, Never>?
@@ -59,6 +64,20 @@ public final class ActivityEngine {
     private let persist: (EngineState) -> Void
 
     public private(set) var state: EngineState
+    public private(set) var mode: TrackingMode
+
+    // The coordinate an outing is measured from: the host's home in
+    // home-anchored mode, the last rest stop in roaming mode (nil until one
+    // exists — a roaming outing may start with no anchor at all).
+    public var anchor: (lat: Double, lng: Double)? {
+        switch mode {
+        case .homeAnchored:
+            return home().map { ($0.lat, $0.lng) }
+        case .roaming:
+            guard let lat = state.baseLat, let lng = state.baseLng else { return nil }
+            return (lat, lng)
+        }
+    }
 
     // Ephemeral (not persisted): latest motion read.
     private var regime: MotionCoordinator.MotionState = .unknown
@@ -70,7 +89,8 @@ public final class ActivityEngine {
         home: @escaping () -> (lat: Double, lng: Double, radius: Double)?,
         now: @escaping () -> Date = Date.init,
         state: EngineState,
-        persist: @escaping (EngineState) -> Void
+        persist: @escaping (EngineState) -> Void,
+        mode: TrackingMode = .homeAnchored
     ) {
         self.control = control
         self.backend = backend
@@ -78,6 +98,7 @@ public final class ActivityEngine {
         self.now = now
         self.state = state
         self.persist = persist
+        self.mode = mode
     }
 
     // Production wiring: rehydrate durable state and persist to the App Group.
@@ -85,11 +106,12 @@ public final class ActivityEngine {
         control: LocationControlling,
         backend: ActivityBackend,
         home: @escaping () -> (lat: Double, lng: Double, radius: Double)?,
-        stateStore: EngineStateStore
+        stateStore: EngineStateStore,
+        mode: TrackingMode = .homeAnchored
     ) -> ActivityEngine {
         ActivityEngine(
             control: control, backend: backend, home: home,
-            now: Date.init, state: stateStore.load(), persist: { stateStore.save($0) }
+            now: Date.init, state: stateStore.load(), persist: { stateStore.save($0) }, mode: mode
         )
     }
 
@@ -132,6 +154,10 @@ public final class ActivityEngine {
     }
 
     private func process(_ event: Event) async {
+        // Roaming: a stop that has lasted the rest threshold closes the outing
+        // and becomes the new base, whatever signal woke us. Evaluated lazily
+        // (no timers here) so it is deterministic and survives suspension.
+        await settleIfRested()
         switch event {
         case let .homeExit(at):              await handleHomeExit(at: at)
         case let .homeEnter(at):             await handleHomeEnter(at: at)
@@ -141,6 +167,8 @@ public final class ActivityEngine {
         case let .reconcile(inside):         await reconcile(homeInside: inside)
         case let .manualStart(at):           await handleManualStart(at: at)
         case let .manualEnd(at):             await handleHomeEnter(at: at)   // same as coming home
+        case .tick:                          break                           // settleIfRested ran above
+        case let .setMode(mode):             await switchMode(to: mode)
         }
     }
 
@@ -164,7 +192,12 @@ public final class ActivityEngine {
                 control.requestState(id: Self.dwellGeofenceId)
             }
         case .atHome:
-            break
+            // Roaming: resting at the base. Re-arm its fence and ask for its
+            // state so a departure while the app was dead is caught.
+            if mode.isRoaming, let lat = state.baseLat, let lng = state.baseLng {
+                armBaseFence(lat: lat, lng: lng)
+                control.requestState(id: Self.dwellGeofenceId)
+            }
         case .session:
             control.stopContinuous()
         }
@@ -175,6 +208,13 @@ public final class ActivityEngine {
                               confidence: CMMotionActivityConfidence) async {
         self.regime = regime
         self.regimeConfidence = confidence
+
+        // Roaming, resting at the base (or with no base yet): getting into a
+        // vehicle is a departure. Walking is not — people walk around a rest stop.
+        if mode.isRoaming, state.phase == .atHome, regime.isVehicle, confidence != .low {
+            await beginOuting(at: now(), walking: false, source: "roaming")
+            return
+        }
 
         // While moving in a vehicle, motion flipping to walking with confidence
         // means "got out" — an arrival. (The parked-but-still-automotive case
@@ -197,13 +237,17 @@ public final class ActivityEngine {
         // (boundary jitter / cold-wake double fire). This is the dup-outing fix:
         // phase is set synchronously below before any await, so a racing exit
         // queued behind this one bails here.
-        guard state.phase == .atHome, home() != nil else { return }
+        guard state.phase == .atHome, home() != nil, !mode.isRoaming else { return }
+        await beginOuting(at: when, walking: regime == .walking, source: "slc-auto")
+    }
 
-        let walking = (regime == .walking)
+    // Shared departure transition: flip the phase synchronously (a racing
+    // duplicate trigger bails at the callers' phase guards), then open the outing.
+    private func beginOuting(at when: Date, walking: Bool, source: String) async {
         state.phase = walking ? .onSite : .transit
         persist(state)
-
-        await startOuting(walking: walking, at: when)
+        if mode.isRoaming { control.removeGeofence(id: Self.dwellGeofenceId) }   // leaving the base fence
+        await startOuting(walking: walking, at: when, source: source)
     }
 
     private func handleHomeEnter(at when: Date) async {
@@ -230,6 +274,11 @@ public final class ActivityEngine {
 
     // Dwell geofence crossed while GPS was off. coord = best-known position.
     private func handleDwellExit(lat: Double, lng: Double, at when: Date) async {
+        // Roaming: the dwell fence doubles as the base fence while resting.
+        if mode.isRoaming, state.phase == .atHome, state.baseLat != nil {
+            await beginOuting(at: when, walking: regime == .walking, source: "roaming")
+            return
+        }
         guard state.phase == .onSite else { return }
         if regime.isVehicle || regime == .unknown {
             await departToTransit()                    // real departure
@@ -249,6 +298,18 @@ public final class ActivityEngine {
     }
 
     private func handleSample(lat: Double, lng: Double, speed: CLLocationSpeed?, at when: Date) async {
+        if mode.isRoaming, state.phase == .atHome {
+            if (speed ?? 0) >= 6 {
+                // Moving fast with no departure signal yet (motion denied/stale).
+                await beginOuting(at: when, walking: false, source: "roaming")
+            } else if state.baseLat == nil {
+                // First usable fix: treat where we are as the starting rest stop.
+                adoptBase(lat: lat, lng: lng)
+                return
+            } else {
+                return
+            }
+        }
         guard state.phase == .transit || state.phase == .onSite else { return }
         if let previous = state.lastSampleAt, when <= previous { return }
 
@@ -269,8 +330,8 @@ public final class ActivityEngine {
             }
         }
 
-        // Max distance from home + Far personal-record milestone.
-        if let h = home() {
+        // Max distance from the anchor + Far personal-record milestone.
+        if let h = anchor {
             let d = Self.distance(h.lat, h.lng, lat, lng)
             if d > state.maxDistanceMeters {
                 state.maxDistanceMeters = d
@@ -326,7 +387,9 @@ public final class ActivityEngine {
     // ─── Transitions ─────────────────────────────────────────────────
     private func startOuting(walking: Bool, at when: Date, source: String = "slc-auto") async {
         let mode = walking ? "walk" : "drive"
-        guard let h = home() else { return }
+        // Home-anchored outings need a home; a roaming outing may have no anchor yet.
+        let h = anchor
+        if h == nil, !self.mode.isRoaming { return }
         // Generate the durable identity SYNCHRONOUSLY; the FSM uses it from here
         // on and never depends on the backend's return (which may be nil offline).
         let cid = UUID().uuidString
@@ -340,7 +403,7 @@ public final class ActivityEngine {
 
         let serverId = await backend.startOuting(
             clientOutingId: cid, mode: mode, source: source, at: when,
-            homeLat: h.lat, homeLng: h.lng
+            homeLat: h?.lat, homeLng: h?.lng
         )
         state.openOutingId = serverId   // advisory (nil offline)
 
@@ -413,6 +476,12 @@ public final class ActivityEngine {
         // firing on every requestState) is idempotent.
         let cid = state.clientOutingId
         let wasSession = state.phase == .session
+        // Roaming: wherever this outing ends is the next base — the confirmed
+        // dwell anchor if we are parked, else the last known fix.
+        let nextBase: (Double, Double)? = mode.isRoaming
+            ? (state.dwellAnchorLat.flatMap { lat in state.dwellAnchorLng.map { (lat, $0) } }
+               ?? state.lastSampleLat.flatMap { lat in state.lastSampleLng.map { (lat, $0) } })
+            : nil
         state.phase = .atHome
         persist(state)
 
@@ -439,6 +508,43 @@ public final class ActivityEngine {
         state.dwellAnchorLng = nil
         state.dwellSince = nil
         resetSegmentAccumulation()
+        if let (lat, lng) = nextBase { adoptBase(lat: lat, lng: lng) }
+        persist(state)
+    }
+
+    // ─── Roaming mode ────────────────────────────────────────────────
+    // A settled stop that has lasted the rest threshold ends the outing; the
+    // stop becomes the base and its fence stays armed to catch the departure.
+    private func settleIfRested() async {
+        guard case let .roaming(threshold) = mode, state.phase == .onSite,
+              let since = state.dwellSince, now().timeIntervalSince(since) >= threshold else { return }
+        await endOuting(at: now())
+    }
+
+    private func adoptBase(lat: Double, lng: Double) {
+        state.baseLat = lat
+        state.baseLng = lng
+        persist(state)
+        armBaseFence(lat: lat, lng: lng)
+    }
+
+    private func armBaseFence(lat: Double, lng: Double) {
+        control.armGeofence(
+            id: Self.dwellGeofenceId,
+            center: CLLocationCoordinate2D(latitude: lat, longitude: lng),
+            radius: Self.dwellGeofenceRadiusM
+        )
+    }
+
+    // Runtime toggle. Any open outing ends here; roaming state is discarded so
+    // the modes never share an anchor. The coordinator re-establishes fences.
+    private func switchMode(to newMode: TrackingMode) async {
+        guard newMode != mode else { return }
+        if state.phase != .atHome { await endOuting(at: now()) }
+        mode = newMode
+        state.baseLat = nil
+        state.baseLng = nil
+        control.removeGeofence(id: Self.dwellGeofenceId)
         persist(state)
     }
 
@@ -458,11 +564,8 @@ public final class ActivityEngine {
             // Away now. If we still think we're home, we left while the app was
             // off and never saw the geofence exit — start an outing. The true
             // departure time is unknown; source flags it as reconstructed.
-            if state.phase == .atHome, home() != nil {
-                let walking = (regime == .walking)
-                state.phase = walking ? .onSite : .transit
-                persist(state)
-                await startOuting(walking: walking, at: now(), source: "boot-reconcile")
+            if state.phase == .atHome, home() != nil, !mode.isRoaming {
+                await beginOuting(at: now(), walking: regime == .walking, source: "boot-reconcile")
             }
             // else transit/onSite: bootstrap() already re-armed the radio.
         }

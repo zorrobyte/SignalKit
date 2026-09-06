@@ -24,7 +24,7 @@ The query boundary uses `HealthReading` and native `HealthChangePage` values wit
 
 | File | Layout |
 | --- | --- |
-| `activityEngine.state.v2` | JSON of `EngineState` with synthesized Codable keys matching its property names; dates are native `Date` encoding |
+| `activityEngine.state.v2` | JSON of `EngineState` with synthesized Codable keys matching its property names; dates are native `Date` encoding. `baseLat`/`baseLng` (roaming base) were added after 0.3.0 as optionals and decode as nil from older state |
 | `location.home.v1` | Dictionary `lat`, `lng`, `accuracy`, `radius` (Double) and `setAt` (Unix seconds) |
 | `health-changes-v1.json` | `windowStart` (`yyyy-MM-dd`), `cursors` keyed by type identifier with `anchor` (archived `HKQueryAnchor`), `samples` (date to sample UUID strings), `caughtUp`; `dirtyDates`; `deletionEvidence` as `type|date` strings |
 | `health-upload-checkpoint-v1.json` | Dictionary keyed `date|type` with `value` and `unit` |

@@ -51,12 +51,14 @@ import Testing
     let radio = FakeLocationDriver(), motionDriver = FakeMotionDriver(), output = FakeBackend()
     let nativeCallbackSender = CLLocationManager()
     let coordinator: LocationCoordinator
-    init(authorized: CLAuthorizationStatus = .authorizedAlways, precise: CLAccuracyAuthorization = .fullAccuracy) {
+    init(authorized: CLAuthorizationStatus = .authorizedAlways, precise: CLAccuracyAuthorization = .fullAccuracy,
+         mode: TrackingMode = .homeAnchored, motionAvailable: Bool = false) {
         defaults = UserDefaults(suiteName: suite)!
         stateDefaults = UserDefaults(suiteName: stateSuite)!
         radio.authorizationStatus = authorized; radio.accuracyAuthorization = precise
+        motionDriver.available = motionAvailable   // read once by MotionCoordinator.init
         coordinator = LocationCoordinator(output: output, defaults: defaults, stateDefaults: stateDefaults,
-            motion: MotionCoordinator(driver: motionDriver), driver: radio)
+            motion: MotionCoordinator(driver: motionDriver), driver: radio, mode: mode)
     }
     func clean() {
         coordinator.stopContinuous(); coordinator.motion.stop()

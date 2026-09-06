@@ -6,7 +6,7 @@ Import `ActivityTracking`. Coordinators, the engine, driver interfaces, and back
 
 ### Constructor
 
-`init(output:defaults:stateDefaults:motion:log:precisePurposeKey:driver:)` requires a `TrackingOutput`, ordinary app preferences, engine/shared state preferences, and a retained `MotionCoordinator`. The optional diagnostic sink defaults to no-op. The precise-purpose key defaults to `preciseForOuting`; the host Info.plist must contain the matching explanation. `driver` defaults to `CoreLocationDriver` and can be replaced for deterministic tests or recorded signal replay.
+`init(output:defaults:stateDefaults:motion:log:precisePurposeKey:driver:mode:)` requires a `TrackingOutput`, ordinary app preferences, engine/shared state preferences, and a retained `MotionCoordinator`. `mode` selects `TrackingMode.homeAnchored` (default) or `.roaming(restThreshold:)`; see [Tracking modes](#tracking-modes). The optional diagnostic sink defaults to no-op. The precise-purpose key defaults to `preciseForOuting`; the host Info.plist must contain the matching explanation. `driver` defaults to `CoreLocationDriver` and can be replaced for deterministic tests or recorded signal replay.
 
 Initialization configures a location manager and restores saved home/settings. Call `bootstrap()` during app launch to arm monitoring and restore engine behavior. Repeated bootstrap calls do not register duplicate callbacks or start duplicate services. Retain the coordinator for the process lifetime; it is not a short-lived SwiftUI view model.
 
@@ -36,6 +36,9 @@ These mirrors are read-only to the host. Commands go through coordinator methods
 | `requestFreshFix(timeout:)` | Return a sufficiently fresh cached fix or await a delegate result; default timeout 12 seconds; return nil for denial, concurrent request, error, or timeout |
 | `setHomeToCurrentLocation()` | Obtain a precise fresh fix, persist it in both preference stores, install a 75-meter home region, and emit `recordHome` |
 | `setHome(_:)` | Adopt a host-supplied `HomeLocation` (restored or map-picked) through the same persistence, region, and `recordHome` path |
+| `setTrackingMode(_:)` | Switch modes at runtime: ends any open outing, swaps the home fence for a base fence (or back), adopts the current fix as the base when roaming, and flushes |
+| `refreshTrackingState()` | Post `tick` and flush; recognizes a completed rest after suspension (roaming), harmless otherwise |
+| `trackingMode`, `anchorCoordinate` | The active mode and the coordinate outings are measured from (home, or the roaming base; nil before either exists) |
 | `startManualSession()` | Start the optional legacy session state through the same engine/persistence path |
 | `endCurrentOutingManually(note:)` | End the current engine outing and request a flush; the optional note is currently not exported |
 | `distance(_:_:_:_:)` | Geodesic distance in meters between latitude/longitude pairs |
@@ -69,12 +72,30 @@ The engine can be used independently of either native coordinator. Supply `Locat
 | `motion(state, confidence)` | Motion classification; adjust tracking regime and transit sampling |
 | `reconcile(homeInside:)` | Cold-start region state; recover a missed departure or arrival |
 | `manualStart(at:)`, `manualEnd(at:)` | Optional manual-session lifecycle using the same durable identities |
+| `tick(at:)` | Roaming only: re-evaluate the rest threshold with no new sensor data (background task, foreground entry, coordinator timer) |
+| `setMode(_:)` | Switch `TrackingMode`; ends an open outing and clears the roaming base |
+
+### Tracking modes
+
+`TrackingMode` is fixed per engine/coordinator instance unless changed through `setMode`/`setTrackingMode`. The engine re-checks the rest threshold before processing every event, so a stop is recognized as a rest on the next signal even if the app was suspended when the threshold passed.
+
+| | `.homeAnchored` (default) | `.roaming(restThreshold:)` |
+| --- | --- | --- |
+| Anchor | Host-chosen home, persisted under `location.home.v1`; auto-proposed from the first precise fix | The last rest stop (`EngineState.baseLat/baseLng`); the first accepted slow fix becomes the initial base; nil until then |
+| Outing starts | Home geofence exit, or boot reconcile finding the device outside home | Vehicle motion at medium/high confidence, a fix at 6 m/s or faster, or exiting the base fence |
+| Outing ends | Home geofence entry, boot reconcile inside home, or manual end | A confirmed dwell lasting `restThreshold` (default 4 hours), or manual end; the end time is when the rest is recognized |
+| Between outings | No fences other than home; SLC and visits only | The `dwell` region stays armed around the base to catch the departure |
+| `startOuting` `homeLat/homeLng` | Home | Base, or nil for the very first outing |
+| `source` | `slc-auto`, `boot-reconcile` | `roaming` |
+| Home events | Drive the state machine | Ignored; the home fence is never installed |
+
+Walking away from a rest stop does not start a roaming outing; people walk around truck stops and hotels. A short stop below the threshold is an ordinary dwell segment inside the outing. Max-distance and personal-record logic measure from the anchor and are skipped while no anchor exists.
 
 Events are FIFO and cannot interleave during awaited backend calls. Stable client outing/segment IDs are persisted before those awaits, preventing duplicate creations during reentrant native callbacks. Backend IDs are advisory; offline operation must not depend on receiving one.
 
 ### State and persistence
 
-`EngineState` is Codable/Equatable. It stores phase, client/server outing IDs, mode/start time, current segment identity/type, dwell anchor/date, last sample coordinates/date, segment distance/max speed, outing max distance, previous farthest distance, and record flag. Dates are native Date; distances are meters and speeds meters/second.
+`EngineState` is Codable/Equatable. It stores phase, client/server outing IDs, mode/start time, current segment identity/type, dwell anchor/date, last sample coordinates/date, segment distance/max speed, outing max distance, previous farthest distance, record flag, and the roaming base coordinate. Dates are native Date; distances are meters and speeds meters/second.
 
 `EngineStateStore(defaults:)` uses `activityEngine.state.v2`. `load()` returns an empty state for missing/corrupt storage and repairs an away state lacking a client ID while preserving the prior distance record. `save(_:)` encodes to the supplied defaults. Use an isolated suite per tracking identity. Home/settings keys are `location.home.v1` and `location.highAccuracyGPS.v1`.
 
@@ -92,7 +113,7 @@ These values reach the backend and persisted state as plain strings. Treat them 
 | --- | --- |
 | Outing `mode` (`setOutingMode`, `EngineState.outingMode`) | `drive`, `walk`, `mixed` |
 | Segment `type` (`startSegment`, `EngineState.currentSegmentType`) | `transit`, `dwell`, `onfoot` |
-| Outing/session `source` | `slc-auto` (significant-change wake), `boot-reconcile` (state repaired at launch) |
+| Outing/session `source` | `slc-auto` (significant-change wake), `boot-reconcile` (state repaired at launch), `roaming` (departure in roaming mode) |
 | `LocationSample.source` | `continuous`, `slc`, `visit-arrival`, `visit-departure` |
 
 `LocationSample` is Codable/Equatable/Sendable: optional client outing ID, Unix-millisecond timestamp, degree coordinates, meter accuracy/altitude, source string, and optional speed in meters/second. Invalid altitude/speed measurements are nil. Visit observations and session samples do not claim a GPS outing parent.

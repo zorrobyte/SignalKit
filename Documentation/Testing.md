@@ -7,7 +7,7 @@ Run `bash Scripts/test-simulator.sh` from a checkout with Xcode 26.5+, Node.js, 
 | Target | Deterministic coverage |
 | --- | --- |
 | DurableSync | FIFO and bounded batches, duplicate replay, append during drain, concurrent drains, corrupt/truncated files, disk read/write/ack failures, recovery, soft cap, compaction policy validation, retry budgets, cancellation, noncooperative timeouts |
-| ActivityTracking | Engine outing/segment/dwell transitions, region entry/exit reconciliation, duplicate events, manual lifecycle, motion states/noise, sampling policy, fresh/stale/inaccurate location filters, thinning, persisted home/state repair, permission states, location request success/error/timeout, background session ownership |
+| ActivityTracking | Engine outing/segment/dwell transitions, region entry/exit reconciliation, duplicate events, manual lifecycle, motion states/noise, sampling policy, fresh/stale/inaccurate location filters, thinning, persisted home/state repair, permission states, location request success/error/timeout, background session ownership, roaming departures/rests/base adoption and runtime mode switching |
 | HealthSync | Seven-day and configurable windows, DST, changed-only checkpoints, relaunch, empty visibility versus confirmed deletions, locked-store recovery, observer ownership/completion, anchored pagination, metric units/statistics, merged intervals, invalid values, outbox expiry/compaction/batching/failures, status persistence, SDK catalog |
 | SignalKitExamples | Public API compilation, complete tracking event encoding, durable reopen and ordered upload, explicit HealthSync construction without permission side effects |
 
