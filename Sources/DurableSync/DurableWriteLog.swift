@@ -187,7 +187,7 @@ public final class DurableWriteLog<Operation: Codable & Equatable> {
         log.record("wal.cap", "dropped oldest samples, now \(kept.count)")
     }
 
-    public struct DrainResult { public var committed: Int; public var lastError: Error? }
+    public struct DrainResult: Sendable { public var committed: Int; public var lastError: Error? }
 
     // Daily Health rollups replace one another. Compact before taking a drain
     // snapshot so repeated offline reads cannot build an upload backlog.
@@ -213,7 +213,7 @@ public final class DurableWriteLog<Operation: Codable & Equatable> {
     // Per-pass work cap (`cap`) so a constrained background wake can't time out.
     @discardableResult
     public func drain(maxOps cap: Int = 150,
-               execute: (Operation) async throws -> Void) async -> DrainResult {
+               execute: @MainActor (Operation) async throws -> Void) async -> DrainResult {
         guard !isDraining else { return DrainResult(committed: 0, lastError: nil) }
         isDraining = true
         defer { isDraining = false; enforceCapIfNeeded() }
@@ -254,8 +254,8 @@ public final class DurableWriteLog<Operation: Codable & Equatable> {
         budget: TimeInterval = 10,
         backoff: [TimeInterval] = [1.5, 3, 5],
         sleep: (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
-        executeBatch: (([Operation]) async throws -> Void)? = nil,
-        execute: (Operation) async throws -> Void
+        executeBatch: (@MainActor ([Operation]) async throws -> Void)? = nil,
+        execute: @MainActor (Operation) async throws -> Void
     ) async -> DrainResult {
         guard !isDraining else { return DrainResult(committed: 0, lastError: nil) }
         isDraining = true

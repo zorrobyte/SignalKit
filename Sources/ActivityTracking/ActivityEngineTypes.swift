@@ -7,7 +7,7 @@ import Foundation
 
 // ─── Sampling ────────────────────────────────────────────────────────
 // What the engine wants the GPS configured to while it's on.
-public struct SamplingDecision: Equatable {
+public struct SamplingDecision: Equatable, Sendable {
     public let accuracy: CLLocationAccuracy
     public let distanceFilter: CLLocationDistance
     public let activityType: CLActivityType
@@ -99,9 +99,9 @@ public protocol ActivityBackend: AnyObject {
 // Persisted to the App Group so cold SLC/geofence wakes resume correctly —
 // and so a double exit can't create a second outing (openOutingId is set
 // before any await and reconciled on wake).
-public struct EngineState: Codable, Equatable {
+public struct EngineState: Codable, Equatable, Sendable {
     public init() {}
-    public enum Phase: String, Codable { case atHome, transit, onSite, session }
+    public enum Phase: String, Codable, Sendable { case atHome, transit, onSite, session }
 
     public var phase: Phase = .atHome
     // Durable device-generated identity — the FSM's source of truth, set

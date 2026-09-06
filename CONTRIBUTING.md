@@ -6,7 +6,7 @@ SignalKit is a Swift package for iOS sensor collection and durable transport. Co
 
 1. Install Xcode 26.5 or newer and select it with `xcode-select`.
 2. Clone this repository. No accounts, backend services, device data, or secrets are required for package tests.
-3. Run `Scripts/test-simulator.sh` to build every target, run all suites, and produce coverage and test-result artifacts.
+3. Run `Scripts/test-simulator.sh` to build every target, run all suites, produce coverage and test-result artifacts, and verify a warning-free Swift 6 strict-concurrency build.
 4. Read the guide and API reference for the product you are changing. Storage format or replay changes also require the durability guide.
 
 Use injectable drivers/readers for deterministic tests. Do not add test-only switches that disable the production algorithm. Tests must drive the same coordinator/engine/queue code as a host app; only native sensors and transport are substituted. Add a regression test before fixing a failure.

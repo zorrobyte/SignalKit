@@ -53,14 +53,14 @@ import HealthKit
 }
 
 @MainActor final class FakeHealthObservation: HealthObserving {
-    var handlers: [String: @MainActor (Error?, @escaping () -> Void) -> Void] = [:]
+    var handlers: [String: @Sendable @MainActor (Error?, @escaping @Sendable () -> Void) -> Void] = [:]
     var starts = 0
     var stops = 0
     var enabledTypes: [String] = []
     var enabled = true
     var error: Error?
     func observe(_ type: HKSampleType,
-        onChange: @escaping @MainActor (Error?, @escaping () -> Void) -> Void) -> () -> Void {
+        onChange: @escaping @Sendable @MainActor (Error?, @escaping @Sendable () -> Void) -> Void) -> () -> Void {
         starts += 1; handlers[type.identifier] = onChange
         return { [weak self] in self?.stops += 1; self?.handlers[type.identifier] = nil }
     }

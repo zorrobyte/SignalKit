@@ -18,6 +18,17 @@ The query boundary uses `HealthReading` and native `HealthChangePage` values wit
 | Health checkpoint | `health-upload-checkpoint-v1.json` | Date/type to value/unit; means durably queued, not merely read |
 | Health outbox | `health-uploads-v1.jsonl` | Codable HealthAggregate values with Unix-millisecond recordedAt |
 | Health status | `sync.healthRead`, `sync.healthUpload` | Success Date values in the supplied defaults |
+| Health authorization flag | `health.authorizationRequested` | Boolean set once the host has requested HealthKit access; written for the host, never read by the package |
+
+### Persisted layouts
+
+| File | Layout |
+| --- | --- |
+| `activityEngine.state.v2` | JSON of `EngineState` with synthesized Codable keys matching its property names; dates are native `Date` encoding |
+| `location.home.v1` | Dictionary `lat`, `lng`, `accuracy`, `radius` (Double) and `setAt` (Unix seconds) |
+| `health-changes-v1.json` | `windowStart` (`yyyy-MM-dd`), `cursors` keyed by type identifier with `anchor` (archived `HKQueryAnchor`), `samples` (date to sample UUID strings), `caughtUp`; `dirtyDates`; `deletionEvidence` as `type|date` strings |
+| `health-upload-checkpoint-v1.json` | Dictionary keyed `date|type` with `value` and `unit` |
+| `health-uploads-v1.jsonl` | One JSON `HealthAggregate` per line: `date`, `type`, `value`, `unit`, `recordedAt` (Unix milliseconds) |
 
 ## Safe payload evolution
 

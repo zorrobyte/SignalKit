@@ -1,4 +1,7 @@
 // swift-tools-version: 5.9
+// Build with Xcode 26.5 or newer: HealthTypeCatalog references identifiers from the
+// iOS 26 SDK. Deployment stays iOS 17. Language mode is Swift 5; CI also proves a
+// warning-free Swift 6 strict-concurrency build.
 import PackageDescription
 
 let package = Package(

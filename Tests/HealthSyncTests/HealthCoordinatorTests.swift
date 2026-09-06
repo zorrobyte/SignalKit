@@ -62,7 +62,8 @@ import Testing
         #expect(r.authorized == Set([steps as HKObjectType, birth]))
         #expect(o.stops == 1 && o.starts == 2)
         #expect(f.defaults.bool(forKey: "health.authorizationRequested"))
-        var completed = false
+        // The completion runs on the main actor, so this local mutation is safe.
+        nonisolated(unsafe) var completed = false
         o.handlers[steps.identifier]?(nil, { completed = true })
         for _ in 0..<100 where !completed { await Task.yield() }
         #expect(completed)

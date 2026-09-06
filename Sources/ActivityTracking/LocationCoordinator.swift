@@ -3,9 +3,6 @@ import CoreMotion
 import DurableSync
 import Foundation
 import Observation
-#if canImport(UIKit)
-import UIKit
-#endif
 
 
 // CoreLocation orchestration with injected persistence and presentation hooks.
@@ -42,14 +39,14 @@ public final class LocationCoordinator: NSObject {
     public var onWake: (() -> Void)?
 
     // ─── Observable state for UI ─────────────────────────────────────
-    public var authStatus: CLAuthorizationStatus = .notDetermined
-    public var accuracyStatus: CLAccuracyAuthorization = .reducedAccuracy
-    public var lastSample: CLLocation?
-    public var currentOutingStartedAt: Date?
-    public var currentMaxDistanceMeters: Double = 0
-    public var home: HomeLocation?
-    public var lastError: String?
-    public var currentOutingIsSession = false
+    public internal(set) var authStatus: CLAuthorizationStatus = .notDetermined
+    public internal(set) var accuracyStatus: CLAccuracyAuthorization = .reducedAccuracy
+    public internal(set) var lastSample: CLLocation?
+    public internal(set) var currentOutingStartedAt: Date?
+    public internal(set) var currentMaxDistanceMeters: Double = 0
+    public internal(set) var home: HomeLocation?
+    public internal(set) var lastError: String?
+    public internal(set) var currentOutingIsSession = false
     private var didBootstrap = false
     // Sustained high-accuracy GPS. Default off: iOS is allowed to pause the
     // continuous stream (pausesLocationUpdatesAutomatically = true), which
@@ -60,7 +57,7 @@ public final class LocationCoordinator: NSObject {
     public var highAccuracyGPS: Bool {
         didSet { highAccuracyGPSDidChange() }
     }
-    public private(set) var continuousActive: Bool = false
+    public internal(set) var continuousActive: Bool = false
 
     // ─── Background continuous GPS (iOS 16.4+ suspension avoidance) ───
     // We do NOT use CLLocationManager.distanceFilter to thin fixes — a numeric
@@ -80,9 +77,9 @@ public final class LocationCoordinator: NSObject {
     private var endBackgroundActivity: (() -> Void)?
 
     // Activity Engine: the sole outing pipeline. See Documentation/ActivityTracking.md.
-    // Mirror of the engine's phase for the Today readout (the engine itself is
-    // not @Observable, so we copy its phase here after each signal).
-    public var enginePhase: EngineState.Phase = .atHome
+    // Mirror of the engine's phase for host UI (the engine itself is not
+    // @Observable, so we copy its phase here after each signal).
+    public internal(set) var enginePhase: EngineState.Phase = .atHome
     @ObservationIgnored private lazy var engine: ActivityEngine = ActivityEngine.live(
         control: self,
         backend: output,   // structured writes go through the offline write-ahead log
@@ -93,20 +90,20 @@ public final class LocationCoordinator: NSObject {
         stateStore: EngineStateStore(defaults: stateDefaults)
     )
 
-    // Dwell state — surfaced on Today + as the Live Activity contextLabel
-    // so you can see at a glance whether iOS thinks you're stopped somewhere.
-    public var isDwelling: Bool = false
-    public var dwellingSince: Date?
-    public var dwellingPlaceLabel: String?
-    public var dwellingCoord: CLLocationCoordinate2D?
-    // Throttle widget snapshots in continuous mode. 5s feels live enough on
-    // the lock screen without excessive churn.
+    // Dwell state — surfaced to the host's presentation so it can show at a
+    // glance whether iOS thinks the user is stopped somewhere.
+    public internal(set) var isDwelling: Bool = false
+    public internal(set) var dwellingSince: Date?
+    public internal(set) var dwellingPlaceLabel: String?
+    public internal(set) var dwellingCoord: CLLocationCoordinate2D?
+    // Throttle onSnapshot in continuous mode. 5s feels live enough for a
+    // lock-screen surface without excessive churn.
     private var lastSnapshotPublishAt: Date = .distantPast
-    // Tracks whether a Live Activity is up for the current engine-mode outing,
-    // so mirrorEngineState starts/ends it exactly once per outing boundary.
-    private var liveActivityActive = false
+    // Tracks whether the host has been told an outing is being presented, so
+    // mirrorEngineState signals its start/end exactly once per outing boundary.
+    private var outingPresented = false
 
-    public struct HomeLocation: Equatable {
+    public struct HomeLocation: Equatable, Sendable {
         public init(lat: Double, lng: Double, accuracy: Double, radius: Double, setAt: Date) {
             self.lat = lat; self.lng = lng; self.accuracy = accuracy; self.radius = radius; self.setAt = setAt
         }
@@ -228,14 +225,14 @@ public final class LocationCoordinator: NSObject {
         // Also sets currentOutingStartedAt, which the Today card + the existing
         // updateLiveActivity() both key off.
         let away = engine.state.clientOutingId != nil && engine.state.outingStartedAt != nil
-        if away, !liveActivityActive {
-            liveActivityActive = true
+        if away, !outingPresented {
+            outingPresented = true
             // Use the FSM's persisted start so elapsed is correct even after a
             // cold wake mid-outing (falls back to now for a brand-new outing).
             currentOutingStartedAt = engine.state.outingStartedAt
             onSnapshot?()
-        } else if !away, liveActivityActive {
-            liveActivityActive = false
+        } else if !away, outingPresented {
+            outingPresented = false
             currentOutingStartedAt = nil
             onOutingEnded?()
             onSnapshot?()
@@ -314,13 +311,18 @@ public final class LocationCoordinator: NSObject {
     }
 
     private func saveHome(_ l: CLLocation) {
-        let h = HomeLocation(
+        setHome(HomeLocation(
             lat: l.coordinate.latitude,
             lng: l.coordinate.longitude,
             accuracy: l.horizontalAccuracy,
             radius: 75,
             setAt: Date()
-        )
+        ))
+    }
+
+    /// Adopt a host-supplied home (restored from a server or chosen on a map).
+    /// Persists it, installs the home region, and records it through the output.
+    public func setHome(_ h: HomeLocation) {
         self.home = h
         saveHomeToDefaults(h)
         installGeofence(h)
@@ -452,11 +454,7 @@ public final class LocationCoordinator: NSObject {
         )
     }
 
-    // Live Activity + widget presentation lives in
-    // LocationCoordinator+Presentation.swift.
-
     // ─── Helpers ─────────────────────────────────────────────────────
-    // internal: shared with the presentation extension
     public func distance(_ lat1: Double, _ lng1: Double, _ lat2: Double, _ lng2: Double) -> Double {
         let p1 = CLLocation(latitude: lat1, longitude: lng1)
         let p2 = CLLocation(latitude: lat2, longitude: lng2)

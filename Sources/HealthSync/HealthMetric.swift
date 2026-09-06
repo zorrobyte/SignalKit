@@ -12,13 +12,13 @@ public struct HealthMetric {
     public let sampleTypes: Set<HKSampleType>
     public let readTypes: Set<HKObjectType>
     public let deletionTypeIdentifier: String?
-    let read: (any HealthReading, DateInterval) async throws -> Double?
+    let read: @MainActor (any HealthReading, DateInterval) async throws -> Double?
 
     /// Custom queries can use any sample types and any native HealthKit query.
     /// Only set deletionType when absence means a confirmed zero for this metric.
     public init(id: String, label: String, unit: String, sampleTypes: Set<HKSampleType>,
                 deletionType: HKSampleType? = nil, additionalReadTypes: Set<HKObjectType> = [],
-                read: @escaping (any HealthReading, DateInterval) async throws -> Double?) {
+                read: @escaping @MainActor (any HealthReading, DateInterval) async throws -> Double?) {
         self.id = id; self.label = label; self.unit = unit
         self.sampleTypes = sampleTypes; self.deletionTypeIdentifier = deletionType?.identifier
         self.readTypes = Set(sampleTypes.map { $0 as HKObjectType }).union(additionalReadTypes)

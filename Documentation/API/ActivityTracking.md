@@ -24,7 +24,7 @@ Initialization configures a location manager and restores saved home/settings. C
 | `continuousActive` | Whether continuous updates have been armed; not a guarantee that iOS is delivering fixes |
 | `lastError` | User-relevant on-demand home-setting failure, if any |
 
-The host should render these values rather than use writable observable mirrors to command the engine. Commands go through coordinator methods and engine events. Distances remain meters regardless of display-unit preferences.
+These mirrors are read-only to the host. Commands go through coordinator methods and engine events. Distances remain meters regardless of display-unit preferences.
 
 ### Commands and callbacks
 
@@ -35,6 +35,7 @@ The host should render these values rather than use writable observable mirrors 
 | `requestPreciseAccuracy()` | Request temporary full accuracy only when reduced accuracy is active |
 | `requestFreshFix(timeout:)` | Return a sufficiently fresh cached fix or await a delegate result; default timeout 12 seconds; return nil for denial, concurrent request, error, or timeout |
 | `setHomeToCurrentLocation()` | Obtain a precise fresh fix, persist it in both preference stores, install a 75-meter home region, and emit `recordHome` |
+| `setHome(_:)` | Adopt a host-supplied `HomeLocation` (restored or map-picked) through the same persistence, region, and `recordHome` path |
 | `startManualSession()` | Start the optional legacy session state through the same engine/persistence path |
 | `endCurrentOutingManually(note:)` | End the current engine outing and request a flush; the optional note is currently not exported |
 | `distance(_:_:_:_:)` | Geodesic distance in meters between latitude/longitude pairs |
@@ -49,7 +50,7 @@ Live fixes are rejected if accuracy is negative or over 100 meters, if more than
 
 `onChange` emits a known, medium/high-confidence state change. Low-confidence updates still refresh observable state but do not command the engine. Repeated states and unknown classifications do not emit changes. When multiple native bits are set, precedence is walking, running, cycling, automotive, stationary, unknown. `label`, `symbolName`, `isMoving`, `isVehicle`, `liveActivityLabel`, `confidenceName`, and `authStatusName` are presentation helpers, not persisted server vocabulary.
 
-`MotionObservation` holds the five possibly-overlapping classification flags, confidence, and native start date. `MotionActivityDriving` provides availability, authorization status, `start(handler:)`, and `stop()`. Handlers run on the main actor. The native implementation translates CoreMotion callbacks into value snapshots.
+`MotionObservation` holds the five possibly-overlapping classification flags, confidence, and native start date. `MotionActivityDriving` provides availability, authorization status, `start(_:)`, and `stop()`. Handlers run on the main actor. The native implementation translates CoreMotion callbacks into value snapshots.
 
 `LocationDriving` abstracts the radio configuration and monitoring operations. `CoreLocationDriver` forwards to CLLocationManager. Its `beginBackgroundActivity()` returns the matching invalidation closure; the coordinator retains exactly one lease while transit GPS is active and invalidates it when stopping. A fake driver must preserve callback semantics, not implement the state machine itself.
 
@@ -77,11 +78,22 @@ Events are FIFO and cannot interleave during awaited backend calls. Stable clien
 
 `EngineStateStore(defaults:)` uses `activityEngine.state.v2`. `load()` returns an empty state for missing/corrupt storage and repairs an away state lacking a client ID while preserving the prior distance record. `save(_:)` encodes to the supplied defaults. Use an isolated suite per tracking identity. Home/settings keys are `location.home.v1` and `location.highAccuracyGPS.v1`.
 
-Current tuning constants are stopped speed 1 m/s, dwell anchor 50 m, dwell confirmation 150 seconds, dwell geofence 120 m, and farthest-record margin 50 m. Region IDs are `home` and `dwell`; reserve them in the host. `SamplingPolicy.decide(regime:speed:)` returns desired accuracy, distance cadence, and activity type. The coordinator uses that distance as a **software** thinning threshold while keeping native distanceFilter disabled for background continuity.
+Current tuning constants are stopped speed 1 m/s, dwell anchor 50 m, dwell confirmation 150 seconds, dwell geofence 120 m, and farthest-record margin 50 m. Other fixed thresholds: on-site departure at 6 m/s (measured, or inferred over at least 200 m within 5 to 300 seconds); walking arrival requires high motion confidence; automotive distance cadence is `min(120, max(50, 5 × speed))` meters with best accuracy above 25 m/s; the coordinator keeps a continuous fix at least every 8 seconds and throttles `onSnapshot` to every 5 seconds. These are not injectable in 0.x. Region IDs are `home` and `dwell`; reserve them in the host. `SamplingPolicy.decide(regime:speed:)` returns desired accuracy, distance cadence, and activity type. The coordinator uses that distance as a **software** thinning threshold while keeping native distanceFilter disabled for background continuity.
 
 ## Output and control contracts
 
 `TrackingOutput` extends `ActivityBackend` with synchronous `recordSample`, synchronous `recordHome`, and async `flush`. These recording calls must persist locally, not launch untracked network-only writes. The backend protocol covers start/end session and outing, mode, record/max distance, start/end segment, observed dwell/place, and farthest distance. The host maps those events to its own schema and idempotent API.
+
+### String vocabulary
+
+These values reach the backend and persisted state as plain strings. Treat them as a closed set.
+
+| Field | Values |
+| --- | --- |
+| Outing `mode` (`setOutingMode`, `EngineState.outingMode`) | `drive`, `walk`, `mixed` |
+| Segment `type` (`startSegment`, `EngineState.currentSegmentType`) | `transit`, `dwell`, `onfoot` |
+| Outing/session `source` | `slc-auto` (significant-change wake), `boot-reconcile` (state repaired at launch) |
+| `LocationSample.source` | `continuous`, `slc`, `visit-arrival`, `visit-departure` |
 
 `LocationSample` is Codable/Equatable/Sendable: optional client outing ID, Unix-millisecond timestamp, degree coordinates, meter accuracy/altitude, source string, and optional speed in meters/second. Invalid altitude/speed measurements are nil. Visit observations and session samples do not claim a GPS outing parent.
 

@@ -12,7 +12,7 @@ The standalone examples compile as package targets and have their own integratio
 
 ## Update the HealthKit catalog
 
-`Scripts/generate-health-catalog.mjs` reads public `HKTypeIdentifiers.h` and `HKClinicalType.h`, then emits an apply_patch patch for `HealthTypeCatalog+Generated.swift`. Pass the selected SDK's HealthKit `Headers` directory. Review the generated diff, update specialized factories in `HealthTypeCatalog.swift`, and test on the oldest supported OS and newest simulator available. New identifiers added after the shipped SDK need regeneration or explicit `additional` types. Do not introduce private APIs or runtime class scraping.
+`Scripts/generate-health-catalog.mjs` reads public `HKTypeIdentifiers.h` and `HKClinicalType.h` from the selected Xcode's iphoneos SDK (or a `Headers` directory passed as the first argument), then prints an apply_patch patch for `HealthTypeCatalog+Generated.swift`; pass `--write` to update the file directly. Review the generated diff, update specialized factories in `HealthTypeCatalog.swift`, and test on the oldest supported OS and newest simulator available. New identifiers added after the shipped SDK need regeneration or explicit `additional` types. Do not introduce private APIs or runtime class scraping.
 
 ## Package boundaries
 

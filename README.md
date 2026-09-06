@@ -15,7 +15,7 @@ There are no external package dependencies. Logging is opt-in through an injecte
 Add `https://github.com/zorrobyte/SignalKit.git` in Xcode's Package Dependencies, then select the products your app needs. Licensed under MIT.
 
 ```swift
-.package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.2.0")
+.package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.3.0")
 // In a target's dependencies:
 .product(name: "HealthSync", package: "SignalKit")
 ```

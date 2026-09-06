@@ -2,7 +2,7 @@ import CoreMotion
 import Foundation
 
 /// Value snapshot of Apple's possibly overlapping motion classifications.
-public struct MotionObservation {
+public struct MotionObservation: Sendable {
     public var walking, running, cycling, automotive, stationary: Bool
     public var confidence: CMMotionActivityConfidence
     public var startDate: Date

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct HealthWindow {
+public struct HealthWindow: Sendable {
     public let days: Int
     public init(days: Int = 7) { precondition(days > 0 && days <= 365); self.days = days }
     public func start(now: Date = Date(), calendar: Calendar = .current) -> Date {
@@ -27,12 +27,12 @@ public final class HealthChangeJournal {
         let id: String
         let dates: [String]
     }
-    public struct Cursor: Codable {
+    struct Cursor: Codable {
         var anchor: Data?
         var samples: [String: [String]] = [:]
         var caughtUp = false
     }
-    public struct State: Codable {
+    struct State: Codable {
         var windowStart: String?
         var cursors: [String: Cursor] = [:]
         var dirtyDates: Set<String> = []

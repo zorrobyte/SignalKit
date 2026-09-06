@@ -15,3 +15,8 @@ xcrun xccov view --report --json "$result_root/TestResults.xcresult" > "$result_
 node Scripts/check-coverage.mjs "$result_root/coverage.json"
 xcodebuild -scheme SignalKit-Package -configuration Release -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$result_root/DerivedData" build CODE_SIGNING_ALLOWED=NO
+# Consumers may adopt the Swift 6 language mode. Prove the package and its tests
+# compile there with complete concurrency checking and no warnings.
+xcodebuild -scheme SignalKit-Package -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath "$result_root/DerivedData-swift6" build-for-testing CODE_SIGNING_ALLOWED=NO \
+  SWIFT_VERSION=6 SWIFT_STRICT_CONCURRENCY=complete OTHER_SWIFT_FLAGS='-warnings-as-errors'

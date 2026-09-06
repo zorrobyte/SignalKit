@@ -1,6 +1,6 @@
 # Testing and verification
 
-Run `bash Scripts/test-simulator.sh` from a checkout with Xcode 26.5+, Node.js, and jq. Set `SIMULATOR_ID` to select an installed iPhone simulator and `RESULT_ROOT` to an empty artifact directory. The script audits source/documentation, runs every library and example test with coverage, enforces regression floors, and builds Release. It requires no server or credentials. CI runs the same command on macOS 26.
+Run `bash Scripts/test-simulator.sh` from a checkout with Xcode 26.5+, Node.js, and jq. Set `SIMULATOR_ID` to select an installed iPhone simulator and `RESULT_ROOT` to an empty artifact directory. The script audits source/documentation, runs every library and example test with coverage, enforces regression floors, builds Release, and compiles every target in the Swift 6 language mode with complete concurrency checking and warnings treated as errors. It requires no server or credentials. CI runs the same command on macOS 26.
 
 ## Test matrix
 

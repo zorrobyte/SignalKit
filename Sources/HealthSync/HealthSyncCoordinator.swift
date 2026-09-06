@@ -86,7 +86,7 @@ public final class HealthSyncCoordinator {
         }
     }
 
-    public struct TypeAggregate: Identifiable, Hashable {
+    public struct TypeAggregate: Identifiable, Hashable, Sendable {
         public let id: String
         public let label: String
         public let value: Double

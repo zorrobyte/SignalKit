@@ -25,7 +25,7 @@ public struct HealthChangePage {
     /// Returns a cancellation closure. Complete every update after durable work,
     /// including error paths, without waiting for a network upload.
     func observe(_ type: HKSampleType,
-        onChange: @escaping @MainActor (Error?, @escaping () -> Void) -> Void) -> () -> Void
+        onChange: @escaping @Sendable @MainActor (Error?, @escaping @Sendable () -> Void) -> Void) -> () -> Void
     func enableBackgroundDelivery(_ type: HKSampleType) async throws -> Bool
 }
 
@@ -33,9 +33,12 @@ public struct HealthChangePage {
     private let store: HKHealthStore
     public init(store: HKHealthStore) { self.store = store }
     public func observe(_ type: HKSampleType,
-        onChange: @escaping @MainActor (Error?, @escaping () -> Void) -> Void) -> () -> Void {
+        onChange: @escaping @Sendable @MainActor (Error?, @escaping @Sendable () -> Void) -> Void) -> () -> Void {
         let query = HKObserverQuery(sampleType: type, predicate: nil) { _, completion, error in
-            Task { @MainActor in onChange(error, completion) }
+            // HealthKit's completion handler is not declared Sendable; it is safe to
+            // call from any thread, so hand it to the main actor explicitly.
+            nonisolated(unsafe) let completion = completion
+            Task { @MainActor in onChange(error) { completion() } }
         }
         store.execute(query)
         return { [store] in store.stop(query) }

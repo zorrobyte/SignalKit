@@ -1,8 +1,14 @@
 // Emits an apply_patch patch. No private API or runtime reflection.
-// Run: node Scripts/generate-health-catalog.mjs /path/to/HealthKit.framework/Headers
+// Run from the repo root: node Scripts/generate-health-catalog.mjs [Headers dir] [--write]
+// Defaults to the selected Xcode's iphoneos SDK HealthKit headers. Without
+// --write it prints an apply_patch patch instead of touching the file.
 import fs from 'node:fs';
-const headers=process.argv[2];
-if(!headers) throw Error('Provide the public HealthKit SDK Headers directory');
+import { execFileSync } from 'node:child_process';
+const args=process.argv.slice(2);
+const write=args.includes('--write');
+const headers=args.find(a=>!a.startsWith('--'))
+  ?? `${execFileSync('xcrun',['--sdk','iphoneos','--show-sdk-path'],{encoding:'utf8'}).trim()}/System/Library/Frameworks/HealthKit.framework/Headers`;
+if(!fs.existsSync(`${headers}/HKTypeIdentifiers.h`)) throw Error(`No HealthKit headers at ${headers}`);
 const source=['HKTypeIdentifiers.h','HKClinicalType.h'].map(f=>fs.readFileSync(`${headers}/${f}`,'utf8')).join('\n');
 const families={Quantity:'quantity',Category:'category',Characteristic:'characteristic',Correlation:'correlation',Document:'document',Clinical:'clinical',ScoredAssessment:'assessment'};
 let lines=[];
@@ -27,4 +33,5 @@ ${lines.join('\n').replaceAll(', family: .', ', .')}
 `;
 const path='Sources/HealthSync/HealthTypeCatalog+Generated.swift';
 const previous=fs.existsSync(path)?fs.readFileSync(path,'utf8'):null;
-process.stdout.write('*** Begin Patch\n'+(previous?'*** Update File: '+path+'\n@@\n'+previous.trimEnd().split('\n').map(l=>'-'+l).join('\n')+'\n':'*** Add File: '+path+'\n')+result.trimEnd().split('\n').map(l=>'+'+l).join('\n')+'\n*** End Patch');
+if(write){ fs.writeFileSync(path,result); console.log(`Wrote ${path} (${declarations.length} types)`); }
+else process.stdout.write('*** Begin Patch\n'+(previous?'*** Update File: '+path+'\n@@\n'+previous.trimEnd().split('\n').map(l=>'-'+l).join('\n')+'\n':'*** Add File: '+path+'\n')+result.trimEnd().split('\n').map(l=>'+'+l).join('\n')+'\n*** End Patch');

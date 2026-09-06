@@ -23,7 +23,7 @@ import DurableSync
 @Observable
 public final class MotionCoordinator: NSObject {
 
-    public enum MotionState: String {
+    public enum MotionState: String, Sendable {
         case stationary
         case walking
         case running
