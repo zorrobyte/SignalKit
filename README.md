@@ -1,92 +1,166 @@
 # SignalKit
 
-Reusable, backend-independent Swift libraries for iOS 17+ collection and durable upload. Build with Xcode 26.5 or newer for the current HealthKit catalog; deployment remains iOS 17+.
+Three Swift packages for collecting location, motion, and health data on iOS —
+and actually getting it to your server, without losing any of it when the phone
+goes offline, gets force-quit, or reboots mid-trip.
 
-| Product | Owns | Does not own |
-| --- | --- | --- |
-| `ActivityTracking` | CoreLocation, CoreMotion, home-anchored or roaming outing detection, dwell geofences, outing/segment state machine, state persistence, durable tracking outbox | Identity, server APIs, widgets, Live Activities, notifications |
-| `HealthSync` | Configurable daily metrics, native HealthKit readers, type catalog, change reconciliation, durable health outbox | Your permission selection, backend schema, medical interpretation |
-| `DurableSync` | Generic JSONL outbox, FIFO replay, bounded drains, optional compaction/batching, timeout helper | Domain events, networking, credentials |
+No dependencies. No backend SDK. It never sees your credentials and never uploads
+anything itself: you hand it a closure that talks to your server, and it decides
+what to send and when to retry.
 
-There are no external package dependencies. Logging is opt-in through an injected `DiagnosticLog`; the default discards events. The package never uploads logs, carries credentials, or imports a backend SDK.
+## Why this is harder than it looks
+
+- **The phone stops your app whenever it wants.** iOS suspends and kills apps
+  constantly. Anything held in memory is gone. Every event here is on disk before
+  a network call is attempted, so a crash mid-drive resumes the same outing
+  instead of starting a second one.
+- **Health data changes after the fact.** A watch syncs three hours late and
+  yesterday's step count moves. You delete a workout and a day's calories drop.
+  Uploading "today's totals" once is wrong; you have to notice what *changed*.
+- **You will deliver things twice.** A dropped acknowledgement is
+  indistinguishable from a failure, so anything durable is at-least-once. That's
+  a constraint on your backend, and it's better to know now than after a user has
+  four copies of one trip.
+
+## The three products
+
+### `ActivityTracking` — where has this person been?
+
+Watches CoreLocation and CoreMotion and works out, on its own, when a trip
+started and ended. Home-anchored (leaving home starts an outing, coming back ends
+it) or roaming (driving starts one, a long stop ends one) for people with no
+fixed home. It knows walking from driving and samples GPS accordingly — dense in
+a car, sparse when parked — and it keeps its state machine on disk so a cold
+launch from a background wake resumes correctly.
+
+Out comes a stream of events: outing started, segment started, a GPS fix, you
+stopped here, outing ended.
+
+### `HealthSync` — what did their body do today?
+
+You pick the metrics. It handles permission, registers observers so it wakes when
+new samples land, and produces one number per day per metric.
+
+The work is in the corrections. It journals what it has seen, re-uploads only the
+days whose numbers actually moved, and refuses to zero out a day just because it
+sees nothing — "no data" and "permission denied" are deliberately identical in
+Apple's API, so it requires real evidence of deletion first.
+
+### `DurableSync` — the reason nothing gets lost
+
+An append-only log with one rule: an entry is removed only after your uploader
+returns successfully. Crash, lose signal, force-quit — it's still there next
+launch. It replays in order, in batches, with a timeout so one hung request can't
+wedge the queue. When it fills up it drops the oldest raw *samples* and never the
+lifecycle events, because a missing GPS point is a gap and a missing "outing
+ended" is a corrupt record.
 
 ## Install
 
-Add `https://github.com/zorrobyte/SignalKit.git` in Xcode's Package Dependencies, then select the products your app needs. Licensed under MIT.
-
 ```swift
 .package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.5.0")
-// In a target's dependencies:
-.product(name: "HealthSync", package: "SignalKit")
 ```
 
-For local development, add this checkout as an Xcode local package override. Do not copy library sources into a host app.
+Then add the products you need — `ActivityTracking`, `HealthSync`, `DurableSync`
+— to your target. iOS 17+; build with Xcode 26.5+ for the current HealthKit
+catalog. MIT.
 
-## Start with ActivityTracking
+## Quick start
 
-`ActivityTracker` is the whole location stack behind one object: motion, location,
-the outing state machine, a durable outbox, and replay. Supply a persistent
-directory and an idempotent uploader; nothing else is required.
+Both entry points take a persistent directory and an upload closure, and are
+retained for the life of the process. Return from the closure only once your
+server has acknowledged; throw and the work stays queued.
 
 ```swift
 import ActivityTracking
-
-@MainActor
-func makeTracker(directory: URL, defaults: UserDefaults,
-                 send: @escaping @Sendable ([TrackingEvent]) async throws -> Void) -> ActivityTracker {
-    ActivityTracker(storageDirectory: directory, defaults: defaults, uploadBatch: send)
-}
-```
-
-Retain it for the process lifetime. Call `bootstrap()` at launch, `onForeground()`
-on foreground entry, and `drainUploads()` on network recovery and in your
-background handler. Assign presentation callbacks (`onSnapshot`,
-`onOutingCompleted`, …) on the tracker, not on `tracker.location` — the tracker
-installs its own handlers there to drive uploads.
-
-`pendingUploads`, `lastUploadedAt`, `lastUploadError`, and `storageError` are
-observable. Build the pieces yourself with `LocationCoordinator` and
-`DurableTrackingOutput` when you need a different composition.
-
-## Start with HealthSync
-
-The host supplies storage, an explicit metric selection, and an idempotent batch uploader. Persist under Application Support or an App Group, not a temporary directory. Use one directory and one coordinator per account; pause/recreate collection before changing accounts.
-
-```swift
 import HealthKit
 import HealthSync
 
-@MainActor
-func makeHealthSync(directory: URL, defaults: UserDefaults,
-                    send: @escaping @Sendable ([HealthAggregate]) async throws -> Void)
-    -> HealthSyncCoordinator {
-    HealthSyncCoordinator(storageDirectory: directory, defaults: defaults, metrics: [
-        .quantity(HKQuantityType(.stepCount), unit: .count(), id: "steps"),
-        .quantity(HKQuantityType(.heartRate), unit: .count().unitDivided(by: .minute()),
-                  id: "heart_rate", statistic: .average),
-    ], window: HealthWindow(days: 7), uploadBatch: send)
+tracker = ActivityTracker(storageDirectory: directory, defaults: .standard) { events in
+    try await api.send(events)          // [TrackingEvent]
 }
+
+health = HealthSyncCoordinator(storageDirectory: directory, defaults: .standard, metrics: [
+    .quantity(HKQuantityType(.stepCount), unit: .count(), id: "steps"),
+    .quantity(HKQuantityType(.heartRate), unit: .count().unitDivided(by: .minute()),
+              id: "heart_rate", statistic: .average),
+]) { totals in
+    try await api.send(totals)          // [HealthAggregate]
+}
+
+tracker.bootstrap()                     // at launch
+health.bootstrap()
 ```
 
-Retain the instance for the process lifetime. Call `bootstrap()` at app launch, `requestAuthorization()` from a user action, and `syncRecent()` on foreground entry. Set `requestBackgroundWork` to your BGTask scheduling callback; call `drainUploads()` on network recovery and in your background handler. The observer completion waits for durable collection, not for a network upload.
+Then: `requestAuthorization()` from a user action, `onForeground()` /
+`syncRecent()` on foreground entry, and `drainUploads()` on network recovery and
+in your background handler.
 
-`status`, `todayAggregates`, `pendingWrites`, and `storageError` are observable. An initializer storage failure is reported rather than crashing the app. Never describe an in-memory pending write as durably saved.
+Assign presentation callbacks (`onSnapshot`, `onOutingCompleted`, …) on the
+tracker itself, **not** on `tracker.location` — the tracker wires those to drive
+its outbox, and replacing them silently stops uploads.
 
-See [HealthKit coverage and configuration](Documentation/HealthKit.md), [location integration](Documentation/ActivityTracking.md), [durability contract](Documentation/DurableSync.md), and [testing and releases](Documentation/Development.md).
+Storage must be persistent and per-account: Application Support or an App Group,
+never a temporary directory.
 
-## Reference and examples
+## What your server has to do
 
-- API contracts: [ActivityTracking](Documentation/API/ActivityTracking.md), [HealthSync](Documentation/API/HealthSync.md), [DurableSync](Documentation/API/DurableSync.md).
-- Integration: [lifecycle and failure handling](Documentation/Lifecycle.md), [storage and migration](Documentation/Migration.md).
-- Compiled examples: [tracking configuration](Examples/TrackingConfiguration.swift), [health configuration](Examples/HealthConfiguration.swift).
-- Verification: [test matrix, coverage, and device limitations](Documentation/Testing.md).
+Two rules, both consequences of at-least-once delivery:
+
+- **Deduplicate tracking events on `TrackingEvent.id`.** It's generated on device
+  before any network call and survives retries and restarts.
+- **Upsert health totals by (account, date, type), and reject a lower
+  `recordedAt`.** A replayed older revision must not overwrite a newer one.
+
+Get these wrong and replays corrupt data instead of being harmless. The
+[durability contract](Documentation/DurableSync.md) spells out what the queue
+guarantees and what it leaves to you.
+
+## Host setup you can't skip
+
+The package cannot install these for you, and two of them fail *silently*.
+
+| You need | Or else |
+| --- | --- |
+| `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`, `NSMotionUsageDescription` | Permission requests crash or are refused |
+| `NSLocationTemporaryUsageDescriptionDictionary` with your precise-purpose key (default `preciseForOuting`) | Precise-accuracy escalation does nothing |
+| `UIBackgroundModes: location` | Tracking stops when the app suspends. `backgroundUpdatesAvailable` reports false; nothing else tells you |
+| `NSHealthShareUsageDescription` + the HealthKit entitlement | HealthKit authorization fails |
+| `com.apple.developer.healthkit.background-delivery` | Observers never register. `healthBackgroundEnabledTypes` stays 0 with no other symptom |
+
+## What it deliberately doesn't do
+
+Identity and accounts, your server API and schema, widgets, Live Activities,
+notifications, medical interpretation, or choosing which health types to request.
+Those are yours. Logging is opt-in through an injected `DiagnosticLog` that
+discards everything by default; the package never transmits logs.
 
 ## Limits worth knowing
 
-- A catalog type being supported does not prove data exists or read permission was granted. Apple intentionally hides read-denial status.
-- Not every HealthKit object is a daily number. The native reader preserves sample subclasses; characteristics, clinical documents, ECG waveforms, routes, medication concepts, and other specialized objects use Apple's specialized APIs through `reader.store`. Your host defines their export representation.
-- Daily summaries default to seven **calendar** days including today, not a rolling 168 hours. The package can configure another window.
-- Delivery is at least once. Backend operations must be idempotent. A lost acknowledgement or a process crash can replay records.
-- The simulator verifies compilation, state transitions, queue failure/replay, and UI. It does not prove real sensor collection, locked-device behavior, or suspended/terminated delivery.
+- A supported HealthKit type doesn't mean data exists or that read permission was
+  granted. Apple hides read-denial on purpose — empty and denied look the same.
+- Not every HealthKit object is a daily number. ECG waveforms, routes, clinical
+  documents and the like need Apple's specialized APIs, reachable through
+  `reader.store`; you define how they're exported.
+- Daily summaries are seven **calendar** days including today, not a rolling 168
+  hours. Configurable.
+- The simulator proves compilation, state transitions, queue failure and replay.
+  It proves nothing about real sensors, locked-device behavior, or delivery to a
+  suspended or terminated app. Test on a device.
 
-See [LICENSE](LICENSE), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
+## Documentation
+
+- Integration guides: [ActivityTracking](Documentation/ActivityTracking.md),
+  [HealthKit coverage](Documentation/HealthKit.md),
+  [durability contract](Documentation/DurableSync.md)
+- API reference: [ActivityTracking](Documentation/API/ActivityTracking.md),
+  [HealthSync](Documentation/API/HealthSync.md),
+  [DurableSync](Documentation/API/DurableSync.md)
+- Operations: [lifecycle and failure handling](Documentation/Lifecycle.md),
+  [storage and migration](Documentation/Migration.md),
+  [test matrix and device limits](Documentation/Testing.md),
+  [releases](Documentation/Development.md)
+- Buildable examples: [tracking](Examples/TrackingConfiguration.swift),
+  [health](Examples/HealthConfiguration.swift)
+
+[LICENSE](LICENSE) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)
