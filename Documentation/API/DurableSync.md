@@ -60,6 +60,15 @@ A second concurrent low-level drain returns zero without starting another execut
 
 A crash between steps 2 and 3, or a failed acknowledgement rewrite, replays an already-sent value. Use idempotent server operations and monotonic revisions where older values must not replace newer ones. Do not use this queue for irreversible non-idempotent actions without a receiving-side idempotency protocol.
 
+## DiagnosticSink
+
+`DiagnosticLog` takes its handler at initialization, but a host's sink is usually
+its own composition root, which does not exist while the coordinators that need
+the log are still being constructed. `DiagnosticSink` breaks that cycle: hold one,
+pass `sink.log` into the coordinators, then set `sink.handler` once `self` exists.
+The log holds the sink weakly and a nil handler discards events, so events recorded
+before the host attaches are dropped rather than buffered.
+
 ## DiagnosticLog
 
 `DiagnosticLog.init(_:)` accepts a `(String, String) -> Void` handler. `record(_:_: )` invokes it on the main actor. The default handler discards both arguments. Keep sinks fast and privacy-aware; do not synchronously perform networking in them. Queue errors must still be surfaced through status even when logging is disabled.

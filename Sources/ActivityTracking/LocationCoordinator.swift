@@ -46,6 +46,11 @@ public final class LocationCoordinator: NSObject {
     public internal(set) var currentMaxDistanceMeters: Double = 0
     public internal(set) var home: HomeLocation?
     public internal(set) var lastError: String?
+    /// Whether background location updates were accepted. False means the host
+    /// did not declare the `location` background mode, so tracking stops when
+    /// the app is suspended. That is an Info.plist omission, not a permission
+    /// or runtime failure.
+    public private(set) var backgroundUpdatesAvailable: Bool = false
     public internal(set) var currentOutingIsSession = false
     private var didBootstrap = false
     // Sustained high-accuracy GPS. Default off: iOS is allowed to pause the
@@ -176,6 +181,13 @@ public final class LocationCoordinator: NSObject {
         self.manager.activityType = .other
         self.manager.pausesLocationUpdatesAutomatically = true
         self.manager.allowsBackgroundLocationUpdates = true
+        // The driver refuses the write when the host has not declared the
+        // `location` background mode, so read back what the platform accepted
+        // rather than what was requested.
+        self.backgroundUpdatesAvailable = manager.allowsBackgroundLocationUpdates
+        if !backgroundUpdatesAvailable {
+            log.record("location.backgroundMode", "missing UIBackgroundModes location")
+        }
         // MUST be true: iOS 16.4+ suspends background continuous location when
         // the indicator is off (esp. with a distanceFilter set and SLC running,
         // and when updates are started from a background wake). That suspension

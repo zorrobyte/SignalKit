@@ -4,7 +4,7 @@ Reusable, backend-independent Swift libraries for iOS 17+ collection and durable
 
 | Product | Owns | Does not own |
 | --- | --- | --- |
-| `ActivityTracking` | CoreLocation, CoreMotion, home-anchored or roaming outing detection, dwell geofences, outing/segment state machine, state persistence | Identity, server APIs, widgets, Live Activities, notifications |
+| `ActivityTracking` | CoreLocation, CoreMotion, home-anchored or roaming outing detection, dwell geofences, outing/segment state machine, state persistence, durable tracking outbox | Identity, server APIs, widgets, Live Activities, notifications |
 | `HealthSync` | Configurable daily metrics, native HealthKit readers, type catalog, change reconciliation, durable health outbox | Your permission selection, backend schema, medical interpretation |
 | `DurableSync` | Generic JSONL outbox, FIFO replay, bounded drains, optional compaction/batching, timeout helper | Domain events, networking, credentials |
 
@@ -15,12 +15,38 @@ There are no external package dependencies. Logging is opt-in through an injecte
 Add `https://github.com/zorrobyte/SignalKit.git` in Xcode's Package Dependencies, then select the products your app needs. Licensed under MIT.
 
 ```swift
-.package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.4.0")
+.package(url: "https://github.com/zorrobyte/SignalKit.git", from: "0.5.0")
 // In a target's dependencies:
 .product(name: "HealthSync", package: "SignalKit")
 ```
 
 For local development, add this checkout as an Xcode local package override. Do not copy library sources into a host app.
+
+## Start with ActivityTracking
+
+`ActivityTracker` is the whole location stack behind one object: motion, location,
+the outing state machine, a durable outbox, and replay. Supply a persistent
+directory and an idempotent uploader; nothing else is required.
+
+```swift
+import ActivityTracking
+
+@MainActor
+func makeTracker(directory: URL, defaults: UserDefaults,
+                 send: @escaping @Sendable ([TrackingEvent]) async throws -> Void) -> ActivityTracker {
+    ActivityTracker(storageDirectory: directory, defaults: defaults, uploadBatch: send)
+}
+```
+
+Retain it for the process lifetime. Call `bootstrap()` at launch, `onForeground()`
+on foreground entry, and `drainUploads()` on network recovery and in your
+background handler. Assign presentation callbacks (`onSnapshot`,
+`onOutingCompleted`, …) on the tracker, not on `tracker.location` — the tracker
+installs its own handlers there to drive uploads.
+
+`pendingUploads`, `lastUploadedAt`, `lastUploadError`, and `storageError` are
+observable. Build the pieces yourself with `LocationCoordinator` and
+`DurableTrackingOutput` when you need a different composition.
 
 ## Start with HealthSync
 
@@ -52,7 +78,7 @@ See [HealthKit coverage and configuration](Documentation/HealthKit.md), [locatio
 
 - API contracts: [ActivityTracking](Documentation/API/ActivityTracking.md), [HealthSync](Documentation/API/HealthSync.md), [DurableSync](Documentation/API/DurableSync.md).
 - Integration: [lifecycle and failure handling](Documentation/Lifecycle.md), [storage and migration](Documentation/Migration.md).
-- Compiled examples: [offline tracking output](Examples/OfflineTrackingOutput.swift), [health configuration](Examples/HealthConfiguration.swift).
+- Compiled examples: [tracking configuration](Examples/TrackingConfiguration.swift), [health configuration](Examples/HealthConfiguration.swift).
 - Verification: [test matrix, coverage, and device limitations](Documentation/Testing.md).
 
 ## Limits worth knowing

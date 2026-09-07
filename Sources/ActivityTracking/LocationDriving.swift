@@ -40,7 +40,24 @@ import CoreLocation
     public var desiredAccuracy: CLLocationAccuracy { get { manager.desiredAccuracy } set { manager.desiredAccuracy = newValue } }
     public var activityType: CLActivityType { get { manager.activityType } set { manager.activityType = newValue } }
     public var pausesLocationUpdatesAutomatically: Bool { get { manager.pausesLocationUpdatesAutomatically } set { manager.pausesLocationUpdatesAutomatically = newValue } }
-    public var allowsBackgroundLocationUpdates: Bool { get { manager.allowsBackgroundLocationUpdates } set { manager.allowsBackgroundLocationUpdates = newValue } }
+    /// CoreLocation raises an uncatchable Objective-C exception — not a Swift
+    /// error — when this is set without the `location` background mode in the
+    /// host's Info.plist. Refuse the write instead of terminating the app; the
+    /// coordinator reads the property back to learn what was accepted.
+    public var allowsBackgroundLocationUpdates: Bool {
+        get { manager.allowsBackgroundLocationUpdates }
+        set {
+            guard !newValue || Self.hostDeclaresLocationBackgroundMode else { return }
+            manager.allowsBackgroundLocationUpdates = newValue
+        }
+    }
+
+    /// Read from the host bundle once. Declaring `location` in `UIBackgroundModes`
+    /// is what makes background updates legal to enable.
+    public static let hostDeclaresLocationBackgroundMode: Bool = {
+        let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String]
+        return modes?.contains("location") == true
+    }()
     public var showsBackgroundLocationIndicator: Bool { get { manager.showsBackgroundLocationIndicator } set { manager.showsBackgroundLocationIndicator = newValue } }
     public var distanceFilter: CLLocationDistance { get { manager.distanceFilter } set { manager.distanceFilter = newValue } }
     public var monitoredRegions: Set<CLRegion> { manager.monitoredRegions }

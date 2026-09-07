@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Add `ActivityTracker`: the whole location stack behind one retained object — motion, location, the outing state machine, a durable outbox, and replay. Construct it with a storage directory, a defaults store, and an idempotent uploader; `bootstrap()`, `onForeground()`, `drainUploads()`, and `stop()` are the lifecycle. This is the `ActivityTracking` counterpart of `HealthSyncCoordinator`; hosts no longer hand-roll a write-ahead log to use the module.
+- Add `DurableTrackingOutput`, a ready-to-use `TrackingOutput` over `DurableWriteLog`, and `TrackingEvent` with a closed `Kind` vocabulary and a device-generated `id` for server-side dedupe. It owns droppability (samples yes, lifecycle never), batching, a per-batch timeout, retry with backoff, and opportunistic-flush rate limiting — policies every host previously reimplemented.
+- `DurableTrackingOutput.Configuration` exposes `maxOps`, `capSlack`, `batchSize`, `uploadTimeout`, `retryBackoff`, `retryDelay`, `minimumFlushInterval`, and opt-in `compactsDistanceUpdates` (off by default: it is only correct for a backend with set semantics).
+- `CoreLocationDriver` no longer terminates a host that omits the `location` background mode. Setting `allowsBackgroundLocationUpdates` there raises an uncatchable Objective-C exception; the driver now declines the write, and `LocationCoordinator.backgroundUpdatesAvailable` reports what the platform accepted. Hosts that declare the mode are unaffected.
+- Add `DiagnosticSink` to `DurableSync`, whose handler can be attached after construction, so a host can pass a log into coordinators it is still initializing.
+- Replace `Examples/OfflineTrackingOutput.swift` — the adapter hosts used to copy — with `Examples/TrackingConfiguration.swift`, the one-call setup. `TrackingEvent` now ships in `ActivityTracking` rather than the examples target.
+
 ## 0.4.0
 
 - Add `TrackingMode`: `.homeAnchored` (default, unchanged behavior) or `.roaming(restThreshold:)` for users without a fixed home. Roaming outings start on vehicle motion, a fast fix, or leaving the rest fence, and end once a stop lasts the threshold; that stop becomes the base for the next outing.

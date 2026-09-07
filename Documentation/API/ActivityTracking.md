@@ -2,6 +2,80 @@
 
 Import `ActivityTracking`. Coordinators, the engine, driver interfaces, and backend callbacks are main-actor isolated. Native delegate entry points hop to that actor before state changes. Keep one retained tracker and one writer per tracking identity.
 
+## ActivityTracker
+
+The composed entry point: motion, location, engine, durable outbox, and replay
+behind one retained object. Use it unless you need a different composition.
+
+`init(storageDirectory:defaults:stateDefaults:mode:configuration:fileName:log:precisePurposeKey:locationDriver:motionDriver:uploadBatch:)`.
+Only `storageDirectory`, `defaults`, and `uploadBatch` are required. `stateDefaults`
+defaults to `defaults`; pass an App Group suite when extensions share the identity.
+The directory is created if missing. `locationDriver`/`motionDriver` exist for
+deterministic tests and recorded replay.
+
+`uploadBatch` receives `[TrackingEvent]` and must return **only** after server
+acknowledgement, throwing otherwise. Delivery is at least once, so it must be
+idempotent; deduplicate on `TrackingEvent.id`.
+
+| Member | Behavior |
+| --- | --- |
+| `bootstrap()` | Start motion observation, restore home monitoring and engine state, drain leftovers |
+| `onForeground()` | Re-evaluate tracking state (recognizing a rest completed while suspended) and drain |
+| `drainUploads()` | Await the active upload pass; ignores the flush interval |
+| `stop()` | Stop motion and retries; durable events are preserved. Not an account-deletion API |
+| `location`, `motion`, `output` | The composed pieces, for state and commands |
+| `pendingUploads`, `lastUploadedAt`, `uploading`, `lastUploadError`, `storageError` | Observable upload state |
+| `requestBackgroundWork` | Forwarded to the outbox; asks the host to schedule a background opportunity |
+
+Forwarded commands: `requestAuthorization()`, `requestPreciseAccuracy()`,
+`setHomeToCurrentLocation()`, `setHome(_:)`, `setTrackingMode(_:)`,
+`startManualSession()`, `endCurrentOutingManually(note:)`, and `trackingMode`.
+
+Host callbacks mirror `LocationCoordinator`'s names and signatures. **Assign them
+on the tracker, not on `tracker.location`** — the tracker installs its own handlers
+there to drive uploads, and replacing them stops the outbox from draining.
+`onSnapshot` and `onWake` additionally trigger a rate-limited flush;
+`onOutingCompleted` and `onOutingEnded` trigger an immediate drain.
+
+## TrackingEvent
+
+`Codable`/`Equatable`/`Sendable`/`Identifiable` with `id`, `kind`, `fields`,
+optional `sample`, and `recordedAt` in Unix milliseconds. The `id` is generated on
+device before any await, so it is stable across retries and process restarts:
+it is the server's dedupe key. `recordedAt` is when the event was observed, not
+when it was delivered; a replay can arrive much later.
+
+`Kind` is a closed `String`-backed enum whose raw values are the wire strings:
+`sample`, `home`, `session.start`, `outing.start`, `outing.end`, `outing.mode`,
+`outing.record`, `outing.distance`, `segment.start`, `segment.end`, `place.upsert`,
+`farthest`. `Kind.isDroppable` is true only for `sample`. `clientOutingId` reads
+the outing from `fields` or the sample.
+
+## DurableTrackingOutput
+
+A ready-to-use `TrackingOutput` over `DurableWriteLog`. It owns what is a fact
+about tracking rather than about an app: droppability, batch size, per-batch
+timeout, and retry. The host owns transport and schema.
+
+`init(storageURL:configuration:log:now:uploadBatch:)`. `now` is injectable for
+tests. `Configuration` values:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `maxOps` | 25,000 | Log cap; oldest samples trim past it, lifecycle events never do |
+| `capSlack` | nil | Overshoot before trimming; nil means `max(500, maxOps/20)`, so a small `maxOps` does not trim promptly |
+| `batchSize` | 25 | Events per upload call |
+| `uploadTimeout` | 10s | Per-batch ceiling; a hung transport fails the pass, not the app |
+| `retryBackoff` | 1.5, 3, 5 | Delays between no-progress passes inside one drain |
+| `retryDelay` | 30s | Delay before a fresh drain while work remains; 0 disables |
+| `minimumFlushInterval` | 15s | Spacing for opportunistic flushes; `drain()` ignores it |
+| `compactsDistanceUpdates` | false | Collapse superseded `outing.distance`/`farthest` to the newest per outing. Enable **only** if the backend treats them as "set to", not "add" |
+
+`flush()` is the engine's rate-limited trigger; `drain()` always runs and coalesces
+concurrent callers onto one pass. `pendingCount`, `storageError`, `lastUploadedAt`,
+`lastError`, and `uploading` are observable. `stop()` cancels retries without
+deleting durable events.
+
 ## LocationCoordinator
 
 ### Constructor
@@ -15,6 +89,7 @@ Initialization configures a location manager and restores saved home/settings. C
 | Members | Meaning / units |
 | --- | --- |
 | `authStatus`, `accuracyStatus`, `canGetFix` | Current location permission and whether an on-demand location request is permitted |
+| `backgroundUpdatesAvailable` | Whether the platform accepted background updates; false means the host omitted the `location` background mode |
 | `home` | Optional `HomeLocation`: latitude/longitude in degrees, accuracy/radius in meters, native set-at Date |
 | `lastSample` | Last accepted CLLocation; a historical visit can also populate it |
 | `currentOutingStartedAt`, `currentMaxDistanceMeters`, `currentOutingIsSession` | Current engine outing's start, maximum home distance, and legacy session flag |
@@ -55,7 +130,7 @@ Live fixes are rejected if accuracy is negative or over 100 meters, if more than
 
 `MotionObservation` holds the five possibly-overlapping classification flags, confidence, and native start date. `MotionActivityDriving` provides availability, authorization status, `start(_:)`, and `stop()`. Handlers run on the main actor. The native implementation translates CoreMotion callbacks into value snapshots.
 
-`LocationDriving` abstracts the radio configuration and monitoring operations. `CoreLocationDriver` forwards to CLLocationManager. Its `beginBackgroundActivity()` returns the matching invalidation closure; the coordinator retains exactly one lease while transit GPS is active and invalidates it when stopping. A fake driver must preserve callback semantics, not implement the state machine itself.
+`LocationDriving` abstracts the radio configuration and monitoring operations. `CoreLocationDriver` forwards to CLLocationManager, except that it refuses to enable `allowsBackgroundLocationUpdates` when `CoreLocationDriver.hostDeclaresLocationBackgroundMode` is false — CoreLocation raises an uncatchable Objective-C exception there, and a library must not terminate its host over a host configuration omission. Its `beginBackgroundActivity()` returns the matching invalidation closure; the coordinator retains exactly one lease while transit GPS is active and invalidates it when stopping. A fake driver must preserve callback semantics, not implement the state machine itself.
 
 ## ActivityEngine
 
@@ -120,4 +195,4 @@ These values reach the backend and persisted state as plain strings. Treat them 
 
 `LocationControlling` supplies `setContinuous`, `stopContinuous`, `armGeofence`, `removeGeofence`, and `requestState`. If integrating a custom sensor driver, preserve those semantics and return actual region-state observations through engine events.
 
-See [host setup](../ActivityTracking.md), the [buildable adapter](../../Examples/OfflineTrackingOutput.swift), [failure/lifecycle guide](../Lifecycle.md), and [test matrix](../Testing.md). Native permission, battery, and suspended/terminated-delivery behavior still require physical-device validation.
+See [host setup](../ActivityTracking.md), the [buildable setup](../../Examples/TrackingConfiguration.swift), [failure/lifecycle guide](../Lifecycle.md), and [test matrix](../Testing.md). Native permission, battery, and suspended/terminated-delivery behavior still require physical-device validation.

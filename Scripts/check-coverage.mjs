@@ -6,11 +6,12 @@ const report = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const floors = { DurableSync: 0.97, ActivityTracking: 0.91, HealthSync: 0.81 };
 const fileFloors = { 'DurableWriteLog.swift': 0.97, 'ActivityEngine.swift': 0.95,
   'LocationCoordinator.swift': 0.95, 'MotionCoordinator.swift': 0.98,
-  'HealthSyncCoordinator.swift': 0.92, 'HealthUploadPipeline.swift': 0.95 };
+  'HealthSyncCoordinator.swift': 0.92, 'HealthUploadPipeline.swift': 0.95,
+  'DurableTrackingOutput.swift': 0.9, 'ActivityTracker.swift': 0.9 };
 let failed = false;
 // This non-product target is statically linked into ExampleTests. Count only
 // the example implementation files, never the test source itself.
-const exampleFiles = ['OfflineTrackingOutput.swift', 'HealthConfiguration.swift'].map(name =>
+const exampleFiles = ['TrackingConfiguration.swift', 'HealthConfiguration.swift'].map(name =>
   report.targets.find(t => t.name === 'ExampleTests')?.files.find(f => f.name === name));
 const exampleCoverage = exampleFiles.every(Boolean)
   ? exampleFiles.reduce((n, f) => n + f.coveredLines, 0) / exampleFiles.reduce((n, f) => n + f.executableLines, 0)

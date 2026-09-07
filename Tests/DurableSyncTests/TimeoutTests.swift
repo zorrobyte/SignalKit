@@ -82,3 +82,23 @@ nonisolated final class CompletionGate: @unchecked Sendable {
         return true
     }
 }
+
+@MainActor struct DiagnosticSinkTests {
+    @Test func forwardsOnlyAfterTheHostAttachesAndStopsWhenReleased() {
+        var received: [String] = []
+        var sink: DiagnosticSink? = DiagnosticSink()
+        let log = sink!.log
+        log.record("before", "attach")          // no handler yet: discarded
+        #expect(received.isEmpty)
+
+        sink?.handler = { event, detail in received.append(event + ":" + detail) }
+        log.record("after", "attach")
+        #expect(received == ["after:attach"])
+
+        // The log holds the sink weakly, so a released host cannot be resurrected
+        // by a coordinator that outlives it.
+        sink = nil
+        log.record("dangling", "call")
+        #expect(received == ["after:attach"])
+    }
+}
