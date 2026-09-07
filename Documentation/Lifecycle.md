@@ -16,6 +16,13 @@ Create retained services in the host composition root, not in a view's body. Cho
 
 CoreLocation has process-wide/scheduling constraints and the tracker is designed as one process-lifetime service. HealthSync.stop cancels registered observers/retries and cooperative work; a native callback or submitted server operation can still complete. Hosts needing account switching should design an explicit drain/quarantine-and-recreate boundary, rather than just changing a global user ID.
 
+`ActivityTracker` owns this wiring for location: `bootstrap()` at launch,
+`onForeground()` on foreground entry, `drainUploads()` on network recovery and in
+a BGProcessing handler, and `stop()` to halt observation and retries while
+preserving durable events. Retain it for the process lifetime. Assign presentation
+callbacks on the tracker rather than on `tracker.location`, which it wires to
+drive the outbox. `HealthSyncCoordinator` is the same shape for health.
+
 ## Permission states are not equivalent
 
 Location exposes permission and accuracy states. HealthKit exposes platform availability and authorization-request completion, but not a per-type read-denial flag. An empty HealthKit result must not be presented as proof that the person has zero steps/sleep/etc., or as proof that they denied access. The catalog is a list of supported type APIs, not a list of records the person has.
@@ -37,6 +44,12 @@ The host must configure Info.plist purpose strings and signing entitlements. A S
 | Partial change page | Persist cursor/footprints and continue bounded paging | Present catching-up status; don't call partial indexing complete |
 | Invalid batch/compaction policy | Reject before acknowledging a different payload | Fix host policy; original durable queue remains intact |
 | Background expiration | Cooperative work can cancel; durable records remain | Complete the OS task once; schedule another opportunity |
+
+A host that omits the `location` background mode is a distinct, silent case:
+`CoreLocationDriver` refuses to enable background updates rather than letting
+CoreLocation terminate the process, and `LocationCoordinator.backgroundUpdatesAvailable`
+reports false. Collection then works only in the foreground. Surface that flag in a
+diagnostics screen; no permission prompt or runtime error will reveal it.
 
 ## Operational guidance
 

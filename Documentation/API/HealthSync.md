@@ -83,11 +83,20 @@ The samples limit is not a completeness guarantee. `HKObjectQueryNoLimit` is acc
 
 `HealthReadError` cases are `invalidValue`, `incompatibleUnit`, `unsupportedStatistic`, and `perObjectAuthorizationRequired`. Native query/authorization errors propagate too. Empty visibility is not a read-permission status. Read denial is intentionally opaque in Apple's APIs.
 
+## HealthObserving
+
+The observation seam, defaulted by `HealthKitObservation`. `observe(_:onChange:)`
+returns a cancellation closure; call the update's completion after durable work,
+including error paths, and never wait for a network upload inside it.
+`enableBackgroundDelivery(_:)` returns whether the registration succeeded — it
+throws when the host lacks the HealthKit background-delivery entitlement, which is
+the usual reason `healthBackgroundEnabledTypes` stays zero on a real device.
+
 ## HealthTypeCatalog
 
 `available(includeClinicalRecords:additional:)` returns sorted, deduplicated `Entry` values for public SDK types supported by the running OS. Clinical entries default to excluded. `additional` accepts new native object types before the generated catalog has been refreshed.
 
-Each Entry exposes `type`, `family`, `id`, optional `sampleType`, and `requiresPerObjectAuthorization`. Families are quantity, category, characteristic, correlation, document, clinical, workout, activity summary, audiogram, ECG, series, vision prescription, state of mind, assessment, medication, and custom.
+Each Entry exposes `type`, `family`, `id`, optional `sampleType`, and `requiresPerObjectAuthorization`. `Family` is the enum naming them: quantity, category, characteristic, correlation, document, clinical, workout, activity summary, audiogram, ECG, series, vision prescription, state of mind, assessment, medication, and custom.
 
 Availability guards represent API support, not user permission, enabled devices, region eligibility, or visible records. The catalog does not request authorization or automatically upload all types. It is generated from public SDK identifiers, not private reflection. [Coverage and specialized queries](../HealthKit.md) explains types that do not fit daily numeric summaries.
 

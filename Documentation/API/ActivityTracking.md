@@ -71,7 +71,10 @@ tests. `Configuration` values:
 | `minimumFlushInterval` | 15s | Spacing for opportunistic flushes; `drain()` ignores it |
 | `compactsDistanceUpdates` | false | Collapse superseded `outing.distance`/`farthest` to the newest per outing. Enable **only** if the backend treats them as "set to", not "add" |
 
-`flush()` is the engine's rate-limited trigger; `drain()` always runs and coalesces
+It conforms to `TrackingOutput`, so it implements every `ActivityBackend` method
+listed under [Output and control contracts](#output-and-control-contracts); each
+one appends the matching `TrackingEvent.Kind` and returns without waiting on a
+network. `flush()` is the engine's rate-limited trigger; `drain()` always runs and coalesces
 concurrent callers onto one pass. `pendingCount`, `storageError`, `lastUploadedAt`,
 `lastError`, and `uploading` are observable. `stop()` cancels retries without
 deleting durable events.
@@ -124,7 +127,7 @@ Live fixes are rejected if accuracy is negative or over 100 meters, if more than
 
 ## MotionCoordinator and driver types
 
-`MotionCoordinator.init(log:driver:)` defaults to `CoreMotionDriver`. `start()` is idempotent and does nothing when classification is unavailable; `stop()` stops updates once. State includes `available`, `authStatus`, `state`, `confidence`, `updatedAt`, and `isActive`.
+`MotionState` is the classification enum (`stationary`, `walking`, `running`, `cycling`, `automotive`, `unknown`) carrying the presentation helpers below. `MotionCoordinator.init(log:driver:)` defaults to `CoreMotionDriver`. `start()` is idempotent and does nothing when classification is unavailable; `stop()` stops updates once. State includes `available`, `authStatus`, `state`, `confidence`, `updatedAt`, and `isActive`.
 
 `onChange` emits a known, medium/high-confidence state change. Low-confidence updates still refresh observable state but do not command the engine. Repeated states and unknown classifications do not emit changes. When multiple native bits are set, precedence is walking, running, cycling, automotive, stationary, unknown. `label`, `symbolName`, `isMoving`, `isVehicle`, `liveActivityLabel`, `confidenceName`, and `authStatusName` are presentation helpers, not persisted server vocabulary.
 
@@ -174,7 +177,7 @@ Events are FIFO and cannot interleave during awaited backend calls. Stable clien
 
 `EngineStateStore(defaults:)` uses `activityEngine.state.v2`. `load()` returns an empty state for missing/corrupt storage and repairs an away state lacking a client ID while preserving the prior distance record. `save(_:)` encodes to the supplied defaults. Use an isolated suite per tracking identity. Home/settings keys are `location.home.v1` and `location.highAccuracyGPS.v1`.
 
-Current tuning constants are stopped speed 1 m/s, dwell anchor 50 m, dwell confirmation 150 seconds, dwell geofence 120 m, and farthest-record margin 50 m. Other fixed thresholds: on-site departure at 6 m/s (measured, or inferred over at least 200 m within 5 to 300 seconds); walking arrival requires high motion confidence; automotive distance cadence is `min(120, max(50, 5 × speed))` meters with best accuracy above 25 m/s; the coordinator keeps a continuous fix at least every 8 seconds and throttles `onSnapshot` to every 5 seconds. These are not injectable in 0.x. Region IDs are `home` and `dwell`; reserve them in the host. `SamplingPolicy.decide(regime:speed:)` returns desired accuracy, distance cadence, and activity type. The coordinator uses that distance as a **software** thinning threshold while keeping native distanceFilter disabled for background continuity.
+`HomeDefaultPolicy` is the public default-home rule: `isFreshPrecise(_:now:)` accepts a fix with 0...100 m accuracy and an age of -5...15 seconds, and `shouldSetHome(existingHome:preciseAuthorization:fix:now:)` additionally requires no existing home and full-accuracy authorization. `ActivityEngine` exposes its tuning as public constants — `stoppedSpeedMps`, `dwellAnchorRadiusM`, `dwellConfirmSeconds`, `dwellGeofenceRadiusM`, `farRecordMarginM`, `homeGeofenceId`, `dwellGeofenceId` — so a host can display or reserve them, not change them. Current tuning constants are stopped speed 1 m/s, dwell anchor 50 m, dwell confirmation 150 seconds, dwell geofence 120 m, and farthest-record margin 50 m. Other fixed thresholds: on-site departure at 6 m/s (measured, or inferred over at least 200 m within 5 to 300 seconds); walking arrival requires high motion confidence; automotive distance cadence is `min(120, max(50, 5 × speed))` meters with best accuracy above 25 m/s; the coordinator keeps a continuous fix at least every 8 seconds and throttles `onSnapshot` to every 5 seconds. These are not injectable in 0.x. Region IDs are `home` and `dwell`; reserve them in the host. `SamplingPolicy.decide(regime:speed:)` returns a `SamplingDecision` carrying desired accuracy, distance cadence, and activity type. The coordinator uses that distance as a **software** thinning threshold while keeping native distanceFilter disabled for background continuity.
 
 ## Output and control contracts
 

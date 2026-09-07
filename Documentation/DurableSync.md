@@ -18,6 +18,6 @@ Optional policies:
 - `isDroppable`: allows discarding oldest expendable records under pressure. Default false. Lifecycle records should not be droppable. The cap is soft if non-droppable records alone exceed it.
 - `compact`: removes superseded/expired operations before drain. It must return an order-preserving subsequence. Invalid transformations fail before modifying data.
 - `batch`: returns a nonempty contiguous prefix starting at the supplied index. Invalid batches fail before execution. Keep dependent operations as barriers.
-- `onStorageError` and `DiagnosticLog`: local host callbacks; default no-op.
+- `onStorageError` and `DiagnosticLog`: local host callbacks; default no-op. Use `DiagnosticSink` when the log target is the composition root that is still being constructed.
 
 An upload followed by an acknowledgement-write failure can replay. `DrainResult.committed` reports durable acknowledgement, not necessarily every server-side effect. Hosts must handle at-least-once semantics. `clear()` is explicit destructive local deletion for an idle queue; it is not a logout synchronization mechanism.
