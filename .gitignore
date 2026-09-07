@@ -5,3 +5,8 @@ DerivedData/
 xcuserdata/
 .DS_Store
 *.xcresult
+
+# Example app
+ExampleApp/build/
+ExampleApp/server/*.sqlite
+ExampleApp/server/*.log

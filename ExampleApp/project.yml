@@ -1,0 +1,61 @@
+name: SignalKitExample
+options:
+  bundleIdPrefix: com.example.signalkit
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  SignalKit:
+    path: ..
+targets:
+  SignalKitExample:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+    dependencies:
+      - package: SignalKit
+        product: ActivityTracking
+      - package: SignalKit
+        product: HealthSync
+      - package: SignalKit
+        product: DurableSync
+    entitlements:
+      path: App/Resources/SignalKitExample.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+        com.apple.developer.healthkit.background-delivery: true
+    info:
+      path: App/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: SignalKit Example
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes:
+          - location
+          - fetch
+          - processing
+        NSHealthShareUsageDescription: Reads the daily totals you select, to demonstrate the HealthSync upload path.
+        NSHealthUpdateUsageDescription: Writes sample data so a simulator has something for HealthSync to read.
+        NSLocationWhenInUseUsageDescription: Records outings to demonstrate the ActivityTracking upload path.
+        NSLocationAlwaysAndWhenInUseUsageDescription: Records outings in the background to demonstrate the ActivityTracking upload path.
+        NSMotionUsageDescription: Classifies walking and driving so outings switch sampling regimes.
+        NSLocationTemporaryUsageDescriptionDictionary:
+          preciseForOuting: Precise location is needed to anchor home and measure distance from it.
+        NSLocalNetworkUsageDescription: Uploads collected signals to the example backend running on your computer.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.signalkit.example
+        # No team is checked in. HealthKit entitlements require a real signing
+        # identity — ad-hoc signing silently drops them (ENTITLEMENTS_ALLOWED=NO)
+        # and HealthKit then reports "Missing com.apple.developer.healthkit
+        # entitlement" even on the simulator. Set your team in Xcode, or pass
+        # DEVELOPMENT_TEAM=XXXXXXXXXX to xcodebuild. A free personal team works.
+        CODE_SIGN_STYLE: Automatic

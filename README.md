@@ -144,9 +144,10 @@ discards everything by default; the package never transmits logs.
   `reader.store`; you define how they're exported.
 - Daily summaries are seven **calendar** days including today, not a rolling 168
   hours. Configurable.
-- The simulator proves compilation, state transitions, queue failure and replay.
-  It proves nothing about real sensors, locked-device behavior, or delivery to a
-  suspended or terminated app. Test on a device.
+- The simulator's GPS simulation does exercise the engine — geofences, speed
+  regimes, dwells — but CoreMotion classification stays unknown there, and
+  locked-device reads, real GPS accuracy, battery cost, and delivery to a
+  suspended or terminated app still need a physical device.
 
 ## Documentation
 
@@ -162,5 +163,7 @@ discards everything by default; the package never transmits logs.
   [releases](Documentation/Development.md)
 - Buildable examples: [tracking](Examples/TrackingConfiguration.swift),
   [health](Examples/HealthConfiguration.swift)
+- [Example app](ExampleApp/README.md): one tab per product, every knob wired to a
+  control, and a SQLite backend that enforces the two idempotency rules above
 
 [LICENSE](LICENSE) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)

@@ -36,4 +36,4 @@ The 0.5.0 simulator run (September 6, 2026; iOS 26.5, Xcode 26.6) passed 100 tes
 - Stay offline, restart the app, restore connectivity, and verify replay and server deduplication. Simulate low storage without destroying real health data.
 - Measure multi-hour battery use and background task expiration. Verify no observer completion or background session leaks.
 
-The simulator suite is an automated release gate, not certification of hardware collection or battery behavior. A host app must also test its uploader, identity boundaries, entitlements, lifecycle wiring, and UI against a pinned package version.
+The simulator suite is an automated release gate, not certification of hardware collection or battery behavior. Simulated GPS (`simctl location start`, or Features > Location) does exercise geofence transitions, speed-driven regime changes, segment accumulation, and dwell detection against the real engine, so movement is testable without a device; CoreMotion is not, since activity classification stays unknown on a simulator. A host app must also test its uploader, identity boundaries, entitlements, lifecycle wiring, and UI against a pinned package version.
