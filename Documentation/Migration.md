@@ -52,3 +52,7 @@ Anchors belong to a fixed predicate. The coordinator resets them as the oldest i
 Never relabel an existing outbox with another account ID. Quiesce collection, settle in-flight work, and either drain the old identity's queue or preserve it in that identity's quarantine directory. Create a fresh service, directory, and defaults suite for the new identity. If moving files, do so while the writer is idle and preserve their protection attributes. Verify pending counts and decodability before deleting any source copy.
 
 No automatic server migrations or account-deletion workflow are included in SignalKit. Those belong to the host and must be tested against its authorization and retention model.
+
+## Complete motion observations (unreleased)
+
+Existing `MotionObservation` initializers compile unchanged; the added `unknown` argument defaults to false. Custom drivers should populate it when their source provides an explicit unknown flag. Existing motion-state precedence and `onChange` filtering are unchanged. Use `onObservation` for full-fidelity presentation events instead of replacing `onChange`, which may already be owned by a location coordinator. No persisted schema changes are introduced.

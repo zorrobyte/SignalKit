@@ -73,8 +73,18 @@ public final class MotionCoordinator: NSObject {
     public private(set) var updatedAt: Date?
     public private(set) var isActive = false
 
-    // Last state we actually logged/persisted/notified on, for noise damping.
-    private var lastEmittedState: MotionState?
+    /// The complete most recent observation, including overlapping flags, explicit unknown,
+    /// and low-confidence updates. Nil until the first observation arrives.
+    public private(set) var latestObservation: MotionObservation?
+
+    /// Last known medium/high-confidence classification. Unlike `state`, this does not
+    /// fluctuate with low-confidence/unknown observations. This is a retained classification, not a guarantee of current activity.
+    public private(set) var confirmedState: MotionState?
+
+    /// Every observation, after observable state is updated. Independent of the engine's
+    /// filtered `onChange` callback; hosts may subscribe without replacing engine wiring.
+    /// Repeated, unknown, and low-confidence observations are intentionally included.
+    public var onObservation: ((MotionObservation) -> Void)?
 
     // LocationCoordinator subscribes here to adapt GPS sampling. Fired only on
     // a meaningful change (state or confidence), on the main actor.
@@ -117,6 +127,8 @@ public final class MotionCoordinator: NSObject {
     private func ingest(_ a: MotionObservation) {
         // Receiving any update confirms we're authorized.
         self.authStatus = driver.authorizationStatus
+        self.latestObservation = a
+        defer { onObservation?(a) }
 
         let newState: MotionState = {
             // Order matters: CoreMotion can flag multiple bits at once during
@@ -141,8 +153,8 @@ public final class MotionCoordinator: NSObject {
         // stationary/unknown flapping a parked phone otherwise emits redundant writes.
         guard a.confidence != .low,
               newState != .unknown,
-              newState != lastEmittedState else { return }
-        lastEmittedState = newState
+              newState != confirmedState else { return }
+        confirmedState = newState
         log.record("motion.state", "\(newState.rawValue) conf=\(confidenceName)")
         onChange?(newState, a.confidence)
     }

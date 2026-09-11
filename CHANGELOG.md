@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Preserve all six native motion flags, including explicit `unknown`, in Equatable `MotionObservation` snapshots.
+- Expose `MotionCoordinator.latestObservation` and `onObservation` for complete observations, including overlapping flags, repeats, and low confidence, without replacing the engine's filtered callback.
+- Expose `confirmedState`, the last known medium/high-confidence classification. Existing `state` and `onChange` behavior are unchanged.
+
 ## 0.5.0
 
 - Add `ActivityTracker`: the whole location stack behind one retained object — motion, location, the outing state machine, a durable outbox, and replay. Construct it with a storage directory, a defaults store, and an idempotent uploader; `bootstrap()`, `onForeground()`, `drainUploads()`, and `stop()` are the lifecycle. This is the `ActivityTracking` counterpart of `HealthSyncCoordinator`; hosts no longer hand-roll a write-ahead log to use the module.
