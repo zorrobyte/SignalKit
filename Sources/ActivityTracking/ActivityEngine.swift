@@ -48,7 +48,9 @@ public final class ActivityEngine {
     public var onOutingCompleted: ((String, Date) -> Void)?
     // ─── Tunables (see spec) ─────────────────────────────────────────
     public static let stoppedSpeedMps: CLLocationSpeed = 1.0
-    public static let dwellAnchorRadiusM: CLLocationDistance = 50
+    // A geofence, not a speed gate: fixes that stay inside this radius keep the dwell clock running even while
+    // creeping (a drive-thru lane, a parking lot crawl). Leaving it drops a fresh anchor.
+    public static let dwellAnchorRadiusM: CLLocationDistance = 80
     public static let dwellConfirmSeconds: TimeInterval = 150
     public static let dwellGeofenceRadiusM: CLLocationDistance = 120
     public static let farRecordMarginM: CLLocationDistance = 50
@@ -360,20 +362,19 @@ public final class ActivityEngine {
         // Dwell detection only matters while GPS is on (transit). The parked-
         // in-vehicle case: speed→0 held within R for T while still "automotive".
         if state.phase == .transit {
-            let stopped = (speed ?? 0) < Self.stoppedSpeedMps
-            if stopped {
-                if let alat = state.dwellAnchorLat, let alng = state.dwellAnchorLng,
-                   Self.distance(alat, alng, lat, lng) <= Self.dwellAnchorRadiusM {
-                    if let since = state.dwellSince,
-                       when.timeIntervalSince(since) >= Self.dwellConfirmSeconds {
-                        await beginDwell(atLat: alat, lng: alng)
-                        return
-                    }
-                } else {
-                    state.dwellAnchorLat = lat
-                    state.dwellAnchorLng = lng
-                    state.dwellSince = when
+            if let alat = state.dwellAnchorLat, let alng = state.dwellAnchorLng,
+               Self.distance(alat, alng, lat, lng) <= Self.dwellAnchorRadiusM {
+                // Still inside the fence, moving or not: the clock keeps running.
+                if let since = state.dwellSince,
+                   when.timeIntervalSince(since) >= Self.dwellConfirmSeconds {
+                    await beginDwell(atLat: alat, lng: alng)
+                    return
                 }
+            } else if (speed ?? 0) < Self.stoppedSpeedMps {
+                // Left the fence (or had none) and came to a stop: a new anchor starts here.
+                state.dwellAnchorLat = lat
+                state.dwellAnchorLng = lng
+                state.dwellSince = when
             } else {
                 state.dwellAnchorLat = nil
                 state.dwellAnchorLng = nil
