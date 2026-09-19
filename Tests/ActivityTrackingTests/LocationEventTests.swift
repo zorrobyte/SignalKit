@@ -58,6 +58,8 @@ private final class SyntheticVisit: CLVisit, @unchecked Sendable {
         let f = TrackingFixture(); defer { f.clean() }
         _ = home(f)
         var context = 0; f.coordinator.onContextChanged = { context += 1 }
+        f.coordinator.bootstrap()
+        await f.settle { f.output.flushes == 1 }
         let arrival = Date().addingTimeInterval(-3_600)
         f.coordinator.locationManager(f.nativeCallbackSender,
             didVisit: SyntheticVisit(arrival: arrival, departure: .distantFuture))
@@ -71,6 +73,31 @@ private final class SyntheticVisit: CLVisit, @unchecked Sendable {
         await f.settle { context == 2 }
         #expect(!f.coordinator.isDwelling && f.coordinator.dwellingCoord == nil)
         #expect(f.output.samples.last?.source == "visit-departure")
+    }
+    @Test func atHomeVisitCannotLeakIntoLaterWalkingOuting() async {
+        let f = TrackingFixture(precise: .reducedAccuracy, motionAvailable: true); defer { f.clean() }
+        let region = home(f)
+        f.coordinator.bootstrap()
+        await f.settle { f.output.flushes == 1 }
+
+        let arrival = Date().addingTimeInterval(-300)
+        f.coordinator.locationManager(
+            f.nativeCallbackSender,
+            didVisit: SyntheticVisit(arrival: arrival, departure: .distantFuture)
+        )
+        await f.settle { f.coordinator.isDwelling }
+        #expect(f.coordinator.lastSample != nil && f.coordinator.lastLiveSample == nil)
+
+        f.motionDriver.handler?(MotionObservation(walking: true, confidence: .high, startDate: Date()))
+        await f.settle { f.coordinator.motion.confirmedState == .walking }
+        f.coordinator.locationManager(f.nativeCallbackSender, didExitRegion: region)
+        await f.settle { f.coordinator.currentOutingStartedAt != nil }
+
+        // A walking departure records in transit; the at-home visit is gone.
+        #expect(f.coordinator.enginePhase == .transit)
+        #expect(!f.coordinator.isDwelling)
+        #expect(f.coordinator.dwellingSince == nil)
+        #expect(f.coordinator.dwellingCoord == nil)
     }
     @Test func manualLifecycleUsesSameDurableEngineAndCallbacks() async {
         let f = TrackingFixture(); defer { f.clean() }
@@ -88,6 +115,8 @@ private final class SyntheticVisit: CLVisit, @unchecked Sendable {
         f.radio.authorizationStatus = .authorizedWhenInUse
         f.coordinator.locationManagerDidChangeAuthorization(f.nativeCallbackSender)
         await f.settle { f.coordinator.authStatus == .authorizedWhenInUse }
+        #expect(!f.radio.calls.contains("always") && !f.radio.calls.contains("slc.start") && !f.radio.calls.contains("fix"))
+        f.coordinator.bootstrap()
         #expect(f.radio.calls.contains("always") && f.radio.calls.contains("slc.start") && f.radio.calls.contains("fix"))
         f.coordinator.lastSample = f.fix()
         await f.coordinator.setHomeToCurrentLocation()
@@ -105,5 +134,34 @@ private final class SyntheticVisit: CLVisit, @unchecked Sendable {
         f.coordinator.locationManagerDidChangeAuthorization(f.nativeCallbackSender)
         await f.settle { f.coordinator.authStatus == .authorizedAlways }
         #expect(f.radio.calls.contains("state:home"))
+    }
+
+    @Test func queuedSensorAndRegionCallbacksAreIgnoredWhileSuspended() async {
+        let f = TrackingFixture(); defer { f.clean() }
+        let region = home(f)
+        var wakes = 0
+        var contextChanges = 0
+        f.coordinator.onWake = { wakes += 1 }
+        f.coordinator.onContextChanged = { contextChanges += 1 }
+        f.coordinator.bootstrap()
+        await f.settle { f.output.flushes == 1 }
+        let baselineWakes = wakes
+        f.coordinator.suspendMonitoring()
+
+        f.coordinator.locationManager(f.nativeCallbackSender, didUpdateLocations: [f.fix()])
+        f.coordinator.locationManager(f.nativeCallbackSender, didExitRegion: region)
+        f.coordinator.locationManager(f.nativeCallbackSender, didEnterRegion: region)
+        f.coordinator.locationManager(f.nativeCallbackSender, didDetermineState: .outside, for: region)
+        f.coordinator.locationManager(
+            f.nativeCallbackSender,
+            didVisit: SyntheticVisit(arrival: Date(), departure: .distantFuture)
+        )
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(f.output.samples.isEmpty)
+        #expect(f.output.outings.isEmpty)
+        #expect(!f.coordinator.isDwelling)
+        #expect(wakes == baselineWakes)
+        #expect(contextChanges == 0)
     }
 }

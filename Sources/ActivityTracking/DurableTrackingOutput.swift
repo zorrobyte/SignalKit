@@ -107,6 +107,12 @@ public final class DurableTrackingOutput: TrackingOutput {
     /// The last upload failure. Cleared by a pass that fully drains.
     public private(set) var lastError: String?
     public private(set) var uploading = false
+    /// True while the host has asked that nothing leave the log. Recording
+    /// continues; `flush()` and `drain()` return at once without acknowledging
+    /// an event, so a consumer that cannot persist what it receives (an app
+    /// that is not in the foreground) never has the durable copy deleted
+    /// from under it.
+    public private(set) var drainsSuspended = false
 
     public init(storageURL: URL, configuration: Configuration = Configuration(),
                 log: DiagnosticLog = DiagnosticLog(),
@@ -153,13 +159,16 @@ public final class DurableTrackingOutput: TrackingOutput {
     /// The engine's opportunistic upload trigger. Rate limited by
     /// `minimumFlushInterval`; concurrent callers await the same pass.
     public func flush() async {
+        guard !drainsSuspended else { return }
         guard now().timeIntervalSince(lastFlushAt) >= configuration.minimumFlushInterval else { return }
         await drain()
     }
 
     /// Upload now, ignoring the flush interval. Use on network recovery, in a
-    /// background handler, and from an explicit user action.
+    /// background handler, and from an explicit user action. A no-op while
+    /// drains are suspended.
     public func drain() async {
+        guard !drainsSuspended else { return }
         if let drainTask { await drainTask.value; return }
         let task = Task { @MainActor in
             defer { drainTask = nil }
@@ -204,6 +213,21 @@ public final class DurableTrackingOutput: TrackingOutput {
     public func stop() {
         retry?.cancel(); retry = nil
         drainTask?.cancel()
+    }
+
+    /// Keep every event in the log until `resumeDrains()`. Recording goes on;
+    /// retries stop and a pass in flight finishes its current batch and stops.
+    /// For a host whose consumer only persists in the foreground.
+    public func suspendDrains() {
+        drainsSuspended = true
+        retry?.cancel(); retry = nil
+        drainTask?.cancel()
+    }
+
+    /// Allow drains again. Nothing is uploaded until the next `flush()` or
+    /// `drain()`, so the host controls the order of its own reconciliation.
+    public func resumeDrains() {
+        drainsSuspended = false
     }
 
     // ─── Recording ───────────────────────────────────────────────────

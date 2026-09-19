@@ -42,6 +42,21 @@ a defaults store, and an idempotent uploader; call `bootstrap()` at launch,
 in a BGProcessing handler. `stop()` halts observation and retries while preserving
 durable events for replay.
 
+A host whose uploader is not a server but the app itself (a local engine that can
+only persist what it receives while in the foreground) calls `onBackground()` when
+the scene leaves the foreground. Recording continues; the durable log keeps every
+event and nothing is acknowledged or deleted until `onForeground()`, whose
+awaitable form `enterForeground()` returns once the backlog has been delivered in
+order, so the host can reconcile its own live state after it.
+
+Every departure begins in transit with GPS on, whatever Motion classifies at the
+door: `walking` only labels the outing. Motion's first classification is often
+stale or absent (denied, not yet asked, a phone in a pocket), and a walk recorded
+with GPS off is no route at all. A confirmed stop of 150 s becomes a dwell as
+before; leaving its fence in any non-stationary state returns to transit, so a walk
+after a bench rest is recorded like any other leg. Walking after a vehicle leg is
+still an arrival; walking after walking is the outing itself.
+
 Assign presentation callbacks (`onSnapshot`, `onDistanceChanged`,
 `onContextChanged`, `onStateChanged`, `onOutingEnded`, `onOutingCompleted`,
 `onWake`) on the tracker. It installs its own handlers on `location` to drive the

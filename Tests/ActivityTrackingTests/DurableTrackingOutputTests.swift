@@ -211,6 +211,38 @@ import Testing
         #expect(sut.pendingCount == 1)
     }
 
+    @Test func suspendedDrainsKeepEveryEventUntilResumed() async {
+        let url = temporaryURL(); defer { try? FileManager.default.removeItem(at: url) }
+        let recorder = Recorder()
+        let sut = output(url, recorder)
+        await recordLifecycle(sut)
+        let queued = sut.pendingCount
+
+        sut.suspendDrains()
+        #expect(sut.drainsSuspended)
+        sut.recordSample(.init(clientOutingId: "outing", timestamp: 101, lat: 1, lng: 2,
+                               accuracy: 5, source: "continuous"))   // recording goes on
+        await sut.flush()
+        await sut.drain()
+        #expect(recorder.events.isEmpty)                 // nothing acknowledged
+        #expect(sut.pendingCount == queued + 1)          // nothing deleted
+        #expect(sut.lastError == nil)                    // not a failure, a hold
+
+        // Durable across a relaunch that is still in the background.
+        let reopened = output(url, Recorder())
+        reopened.suspendDrains()
+        await reopened.drain()
+        #expect(reopened.pendingCount == queued + 1)
+
+        sut.resumeDrains()
+        #expect(!sut.drainsSuspended)
+        await sut.drain()
+        #expect(sut.pendingCount == 0)
+        #expect(recorder.events.count == queued + 1)
+        #expect(recorder.events.map(\.kind) ==
+                [.outingStart, .segmentStart, .sample, .segmentEnd, .outingEnd, .sample])
+    }
+
     @Test func opportunisticFlushIsRateLimitedButExplicitDrainIsNot() async {
         let url = temporaryURL(); defer { try? FileManager.default.removeItem(at: url) }
         let recorder = Recorder()

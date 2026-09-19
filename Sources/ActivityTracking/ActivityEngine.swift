@@ -208,6 +208,7 @@ public final class ActivityEngine {
     // ─── Signal handlers (reached only via process(_:), never directly) ──
     private func handleMotion(_ regime: MotionCoordinator.MotionState,
                               confidence: CMMotionActivityConfidence) async {
+        let previous = self.regime
         self.regime = regime
         self.regimeConfidence = confidence
 
@@ -218,16 +219,32 @@ public final class ActivityEngine {
             return
         }
 
-        // While moving in a vehicle, motion flipping to walking with confidence
-        // means "got out" — an arrival. (The parked-but-still-automotive case
-        // is caught by the speed→0 path in handleSample instead.)
-        if state.phase == .transit, regime == .walking, confidence == .high,
+        // After a vehicle leg, motion flipping to walking with confidence means
+        // "got out" — an arrival. (The parked-but-still-automotive case is
+        // caught by the speed→0 path in handleSample instead.) A walk that
+        // began on foot is already in transit and keeps recording: walking
+        // after walking is the outing itself, not an arrival.
+        if state.phase == .transit, regime == .walking, confidence == .high, previous.isVehicle,
            let lat = state.lastSampleLat, let lng = state.lastSampleLng {
             await beginDwell(atLat: lat, lng: lng)
             return
         }
 
-        // While settled, motion returning to a vehicle means departure.
+        if state.phase == .transit, confidence != .low, regime != previous {
+            // A walk that gets into a car (or a drive that continues on foot)
+            // keeps GPS on with the sampling that fits the new regime, and a
+            // provisional "walk" label learns it was mixed once a vehicle shows up.
+            control.setContinuous(SamplingPolicy.decide(regime: regime, speed: nil))
+            if regime.isVehicle, state.outingMode == "walk", let cid = state.clientOutingId {
+                state.outingMode = "mixed"
+                persist(state)
+                await backend.setOutingMode(clientOutingId: cid, mode: "mixed")
+            }
+            return
+        }
+
+        // Legacy persisted state: an outing that an older build began on foot
+        // (no GPS) and that is now driving departs to transit.
         if state.phase == .onSite, state.currentSegmentType == "onfoot",
            regime.isVehicle, confidence != .low {
             await departToTransit()
@@ -245,8 +262,12 @@ public final class ActivityEngine {
 
     // Shared departure transition: flip the phase synchronously (a racing
     // duplicate trigger bails at the callers' phase guards), then open the outing.
+    // Every departure begins in transit with GPS on, whatever Motion says:
+    // `walking` only labels the outing. A walk recorded with GPS off is no
+    // route at all, and Motion's first classification at the door is often
+    // stale or absent (denied, not yet asked, or the phone still in a pocket).
     private func beginOuting(at when: Date, walking: Bool, source: String) async {
-        state.phase = walking ? .onSite : .transit
+        state.phase = .transit
         persist(state)
         if mode.isRoaming { control.removeGeofence(id: Self.dwellGeofenceId) }   // leaving the base fence
         await startOuting(walking: walking, at: when, source: source)
@@ -282,11 +303,15 @@ public final class ActivityEngine {
             return
         }
         guard state.phase == .onSite else { return }
-        if regime.isVehicle || regime == .unknown {
-            await departToTransit()                    // real departure
+        if regime != .stationary {
+            // Leaving the fence in any moving state (a vehicle, on foot, or
+            // with no classification at all) is a departure: GPS comes back on
+            // so a walk after a bench rest is recorded like any other leg.
+            await departToTransit()
         } else {
-            // Roaming on foot out of even the large fence (e.g. a big park):
-            // re-anchor the dwell here, keep GPS off, stay OnSite.
+            // Motion still says stationary while the fence was crossed: a
+            // stale classification or a large site. Re-anchor the dwell here,
+            // keep GPS off, stay OnSite until something moves.
             state.dwellAnchorLat = lat
             state.dwellAnchorLng = lng
             state.dwellSince = when
@@ -408,12 +433,10 @@ public final class ActivityEngine {
         )
         state.openOutingId = serverId   // advisory (nil offline)
 
-        if walking {
-            await openSegment(type: "onfoot", at: when, placeId: nil)
-        } else {
-            control.setContinuous(SamplingPolicy.decide(regime: regime, speed: nil))
-            await openSegment(type: "transit", at: when, placeId: nil)
-        }
+        // GPS on for every departure. The sampling policy still follows the
+        // regime, so a walk samples finely and a drive coarsely.
+        control.setContinuous(SamplingPolicy.decide(regime: regime, speed: nil))
+        await openSegment(type: "transit", at: when, placeId: nil)
         persist(state)
     }
 
@@ -457,8 +480,9 @@ public final class ActivityEngine {
         persist(state)
 
         // An outing that began on foot and is now driving is "mixed" — learn it
-        // and tell the backend (the start-time mode was provisional).
-        if state.outingMode == "walk", let cid = state.clientOutingId {
+        // and tell the backend (the start-time mode was provisional). Walking
+        // on after a rest keeps the walk a walk.
+        if state.outingMode == "walk", regime.isVehicle, let cid = state.clientOutingId {
             state.outingMode = "mixed"
             await backend.setOutingMode(clientOutingId: cid, mode: "mixed")
         }

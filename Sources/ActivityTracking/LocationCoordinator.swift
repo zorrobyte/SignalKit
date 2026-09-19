@@ -42,6 +42,14 @@ public final class LocationCoordinator: NSObject {
     public internal(set) var authStatus: CLAuthorizationStatus = .notDetermined
     public internal(set) var accuracyStatus: CLAccuracyAuthorization = .reducedAccuracy
     public internal(set) var lastSample: CLLocation?
+    /// Newest retained continuous/SLC fix. Visit pseudo-observations remain in
+    /// `lastSample` for diagnostics but must not be mistaken for route input by
+    /// a host mirroring live geometry.
+    public internal(set) var lastLiveSample: CLLocation?
+    /// Accuracy authorization captured with `lastLiveSample`. Reading the
+    /// coordinator's current authorization later is unsafe because the person
+    /// may have changed Precise Location in between.
+    public internal(set) var lastLiveSampleHasFullAccuracyAuthorization: Bool?
     public internal(set) var currentOutingStartedAt: Date?
     public internal(set) var currentMaxDistanceMeters: Double = 0
     public internal(set) var home: HomeLocation?
@@ -53,6 +61,10 @@ public final class LocationCoordinator: NSObject {
     public private(set) var backgroundUpdatesAvailable: Bool = false
     public internal(set) var currentOutingIsSession = false
     private var didBootstrap = false
+    /// False until the host explicitly bootstraps tracking, and again after it
+    /// stops tracking. Delegate assignment and persisted Home restoration are
+    /// intentionally passive: constructing a coordinator must not arm radios.
+    public private(set) var monitoringActive = false
     // Sustained high-accuracy GPS. Default off: iOS is allowed to pause the
     // continuous stream (pausesLocationUpdatesAutomatically = true), which
     // throttles fixes to brief windows — low power, coarse route, dwells still
@@ -113,6 +125,11 @@ public final class LocationCoordinator: NSObject {
     public internal(set) var dwellingSince: Date?
     public internal(set) var dwellingPlaceLabel: String?
     public internal(set) var dwellingCoord: CLLocationCoordinate2D?
+    /// Reported radius behind `dwellingCoord` when the dwell came from
+    /// CLVisit. Engine-derived dwells use `lastLiveSample` accuracy.
+    public internal(set) var dwellingAccuracy: CLLocationAccuracy?
+    /// Accuracy authorization captured with the evidence behind the dwell.
+    public internal(set) var dwellingHasFullAccuracyAuthorization: Bool?
     // Throttle onSnapshot in continuous mode. 5s feels live enough for a
     // lock-screen surface without excessive churn.
     private var lastSnapshotPublishAt: Date = .distantPast
@@ -137,10 +154,17 @@ public final class LocationCoordinator: NSObject {
     private let highAccuracyGPSKey = "location.highAccuracyGPS.v1"
 
     // ─── Sampling tuning ─────────────────────────────────────────────
-    // Live GPS fixes worse than this are noise (a cell-tower fix can report
-    // accuracy in the thousands of meters) and would otherwise record a bogus
-    // personal-distance record and pollute the trail. Visit events bypass it.
-    private static let maxAcceptableAccuracyMeters: CLLocationDistance = 100
+    // Full-accuracy observations above 100 m remain ordinary radio noise. With
+    // reduced authorization, however, kilometer-scale uncertainty is the
+    // product the user selected; retain a bounded observation so the host can
+    // render it honestly instead of silently producing an empty map.
+    private static let maxRetainedFullAccuracyMeters: CLLocationDistance = 100
+    private static let maxRetainedReducedAccuracyMeters: CLLocationDistance = 10_000
+    // Reduced-authority fixes still reach the output but never enter
+    // ActivityEngine's geometry. Full-accuracy hosts retain SignalKit's
+    // established <=100 m engine policy; a host such as FogPal may apply a
+    // tighter exact-route threshold in its adapter.
+    private static let maxGeometryAccuracyMeters: CLLocationDistance = 100
     // Drop cached/stale fixes — common on a cold SLC wake, where the first
     // delivered location can be minutes old and far from the user now.
     private static let maxSampleAgeSeconds: TimeInterval = 60
@@ -199,18 +223,17 @@ public final class LocationCoordinator: NSObject {
         self.home = loadHomeFromDefaults()
     }
 
-    // Call once from App.init() so SLC wake-ups land on a live delegate.
+    // Call from the host's recording lifecycle. The first call installs the
+    // engine callbacks; later calls resume radios after `suspendMonitoring()`.
     public func bootstrap() {
-        guard !didBootstrap else { return }
+        guard !didBootstrap else {
+            resumeMonitoring()
+            return
+        }
         didBootstrap = true
+        monitoringActive = true
         log.record("location", "bootstrap auth=\(authStatusName) mode=\(trackingMode.isRoaming ? "roaming" : "home")")
-        if let h = home, !trackingMode.isRoaming {
-            installGeofence(h)
-        }
-        if authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse {
-            manager.startMonitoringSignificantLocationChanges()
-            manager.startMonitoringVisits()
-        }
+        startPassiveMonitoring()
         // Motion classification gates the engine's GPS (driving ⇒ GPS on) and
         // keeps the Live Activity context label fresh. Nearly free to run always.
         // The engine mirrors its own state back via onStateChanged after it
@@ -233,6 +256,64 @@ public final class LocationCoordinator: NSObject {
         onWake?()
     }
 
+    /// Stops every persistent location service owned by this coordinator.
+    /// Persisted Home and engine state remain available for a later resume.
+    /// Safe to call before bootstrap and repeatedly, including during reset.
+    public func suspendMonitoring() {
+        monitoringActive = false
+        restTimer?.cancel()
+        restTimer = nil
+        if continuousActive {
+            stopContinuous()
+        } else {
+            // Be explicit even when this process has not observed the stream
+            // start; a newly-created coordinator can inherit OS registrations.
+            manager.stopUpdatingLocation()
+        }
+        manager.stopMonitoringSignificantLocationChanges()
+        manager.stopMonitoringVisits()
+        for region in manager.monitoredRegions {
+            manager.stopMonitoring(for: region)
+        }
+        homeRegion = nil
+        if let continuation = freshFixContinuation {
+            freshFixContinuation = nil
+            freshFixRequestId = nil
+            continuation.resume(returning: nil)
+        }
+        log.record("location", "monitoring suspended")
+    }
+
+    /// Re-arms passive monitoring and restores the radio state required by the
+    /// persisted engine phase. Does not change authorization or persisted data.
+    public func resumeMonitoring() {
+        guard didBootstrap else {
+            bootstrap()
+            return
+        }
+        guard !monitoringActive else { return }
+        monitoringActive = true
+        startPassiveMonitoring()
+        engine.bootstrap()
+        mirrorEngineState()
+        if needsInitialFix, canGetFix { manager.requestLocation() }
+        onWake?()
+        log.record("location", "monitoring resumed")
+    }
+
+    private func startPassiveMonitoring() {
+        if let h = home, !trackingMode.isRoaming {
+            installGeofence(h)
+        }
+        if authStatus == .authorizedWhenInUse {
+            manager.requestAlwaysAuthorization()
+        }
+        if authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse {
+            manager.startMonitoringSignificantLocationChanges()
+            manager.startMonitoringVisits()
+        }
+    }
+
     // Home mode wants a first fix to propose a default home; roaming wants one
     // to adopt the starting rest stop as the base.
     private var needsInitialFix: Bool {
@@ -248,10 +329,10 @@ public final class LocationCoordinator: NSObject {
         await engine.handle(.setMode(mode))
         if mode.isRoaming {
             if let r = homeRegion { manager.stopMonitoring(for: r); homeRegion = nil }
-            if let l = lastSample, isAcceptableFix(l) {
+            if let l = lastSample, isGeometryFix(l) {
                 await engine.handle(.sample(lat: l.coordinate.latitude, lng: l.coordinate.longitude,
                                             speed: nil, at: l.timestamp))
-            } else if canGetFix {
+            } else if monitoringActive, canGetFix {
                 manager.requestLocation()
             }
         } else if let h = home {
@@ -275,9 +356,24 @@ public final class LocationCoordinator: NSObject {
     private func mirrorEngineState() {
         scheduleRestTimer()
         enginePhase = engine.state.phase
-        isDwelling = engine.state.phase == .onSite
-        dwellingSince = engine.state.dwellSince
-        if engine.state.phase != .onSite { dwellingPlaceLabel = nil }
+        let engineDwell = engine.state.phase == .onSite && engine.state.dwellSince != nil
+        isDwelling = engineDwell
+        dwellingSince = engineDwell ? engine.state.dwellSince : nil
+        if engineDwell,
+           let latitude = engine.state.dwellAnchorLat,
+           let longitude = engine.state.dwellAnchorLng {
+            dwellingCoord = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            dwellingAccuracy = lastLiveSample?.horizontalAccuracy
+            dwellingHasFullAccuracyAuthorization = lastLiveSampleHasFullAccuracyAuthorization
+        } else {
+            // `.onSite` also represents an outing that began on foot. Without
+            // a dwell timestamp it is not a confirmed Rest, and any older
+            // CLVisit centroid must not leak into the new outing.
+            dwellingCoord = nil
+            dwellingAccuracy = nil
+            dwellingHasFullAccuracyAuthorization = nil
+            dwellingPlaceLabel = nil
+        }
         // In engine mode the FSM owns max distance; surface it so the Live
         // Activity / widget show the real value (the legacy currentMaxDistance
         // accumulator is never updated on this path).
@@ -399,11 +495,14 @@ public final class LocationCoordinator: NSObject {
     }
 
     /// Adopt a host-supplied home (restored from a server or chosen on a map).
-    /// Persists it, installs the home region, and records it through the output.
+    /// Persists and records it immediately; the region is installed only while
+    /// the host's recording lifecycle is active.
     public func setHome(_ h: HomeLocation) {
         self.home = h
         saveHomeToDefaults(h)
-        installGeofence(h)
+        if monitoringActive {
+            installGeofence(h)
+        }
         log.record("location.setHome", "lat=\(h.lat) lng=\(h.lng) r=\(h.radius)m")
         onSnapshot?()
 
@@ -429,7 +528,7 @@ public final class LocationCoordinator: NSObject {
         // the Live Activity, or the WAL. Visit events bypass the gate: they're
         // discrete arrivals/departures whose pseudo-locations carry
         // intentionally-historical timestamps and looser accuracy.
-        if Self.isLiveFixSource(source), !isAcceptableFix(location) {
+        if Self.isLiveFixSource(source), !isRetainableFix(location) {
             log.record("sample.reject",
                        "src=\(source) acc=\(Int(location.horizontalAccuracy))m age=\(Int(-location.timestamp.timeIntervalSinceNow))s")
             return
@@ -444,6 +543,10 @@ public final class LocationCoordinator: NSObject {
             return
         }
         if source == "continuous" { lastKeptContinuous = location }
+        if Self.isLiveFixSource(source) {
+            lastLiveSample = location
+            lastLiveSampleHasFullAccuracyAuthorization = accuracyStatus == .fullAccuracy
+        }
         self.lastSample = location
         if Self.isLiveFixSource(source), !trackingMode.isRoaming,
            HomeDefaultPolicy.shouldSetHome(existingHome: home != nil,
@@ -455,7 +558,7 @@ public final class LocationCoordinator: NSObject {
         // fixes to it (await so the WAL enqueue below sees the up-to-date
         // clientOutingId); visit pseudo-fixes are a secondary signal and don't
         // drive the FSM. State is mirrored back via onStateChanged.
-        if Self.isLiveFixSource(source) {
+        if Self.isLiveFixSource(source), isGeometryFix(location) {
             let spd: Double? = location.speed >= 0 ? location.speed : nil
             await engine.handle(.sample(
                 lat: location.coordinate.latitude,
@@ -464,8 +567,10 @@ public final class LocationCoordinator: NSObject {
             ))
         }
         if let a = engine.anchor {
-            let d = distance(a.lat, a.lng, location.coordinate.latitude, location.coordinate.longitude)
-            onDistanceChanged?(d)
+            if isGeometryFix(location) {
+                let d = distance(a.lat, a.lng, location.coordinate.latitude, location.coordinate.longitude)
+                onDistanceChanged?(d)
+            }
             let minGap: TimeInterval = continuousActive ? 5 : 0
             if Date().timeIntervalSince(lastSnapshotPublishAt) >= minGap {
                 onSnapshot?()
@@ -486,12 +591,14 @@ public final class LocationCoordinator: NSObject {
             accuracy: location.horizontalAccuracy,
             source: source,
             altitude: altitude,
-            speed: speed
+            speed: speed,
+            hasFullAccuracyAuthorization: accuracyStatus == .fullAccuracy
         ))
     }
 
     // ─── Geofence helpers ────────────────────────────────────────────
     private func installGeofence(_ h: HomeLocation) {
+        guard monitoringActive else { return }
         // Only re-install the home region; leave the engine's "dwell" region
         // (if any) intact.
         for r in manager.monitoredRegions where r.identifier == "home" {
@@ -545,11 +652,24 @@ public final class LocationCoordinator: NSObject {
         source == "continuous" || source == "slc"
     }
 
-    private func isAcceptableFix(_ location: CLLocation) -> Bool {
+    private func isRetainableFix(_ location: CLLocation) -> Bool {
         let acc = location.horizontalAccuracy
-        guard acc >= 0, acc <= Self.maxAcceptableAccuracyMeters else { return false }
+        let maximum = accuracyStatus == .fullAccuracy
+            ? Self.maxRetainedFullAccuracyMeters
+            : Self.maxRetainedReducedAccuracyMeters
+        guard acc >= 0, acc <= maximum else { return false }
         let age = -location.timestamp.timeIntervalSinceNow
         return age >= -5 && age <= Self.maxSampleAgeSeconds
+    }
+
+    /// Evidence safe for exact geometry. Authorization and the reported error
+    /// radius both matter: a surprisingly small radius under reduced access is
+    /// still an approximate observation by contract.
+    private func isGeometryFix(_ location: CLLocation) -> Bool {
+        accuracyStatus == .fullAccuracy
+            && location.horizontalAccuracy >= 0
+            && location.horizontalAccuracy <= Self.maxGeometryAccuracyMeters
+            && isRetainableFix(location)
     }
 
     private var authStatusName: String {
@@ -572,10 +692,11 @@ extension LocationCoordinator: CLLocationManagerDelegate {
             self.authStatus = manager.authorizationStatus
             self.accuracyStatus = manager.accuracyAuthorization
             log.record("auth.changed", "\(authStatusName) accuracy=\(accuracyStatus == .fullAccuracy ? "full" : "reduced")")
-            if authStatus == .authorizedWhenInUse {
+            if monitoringActive, authStatus == .authorizedWhenInUse {
                 manager.requestAlwaysAuthorization()
             }
-            if authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse {
+            if monitoringActive,
+               authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse {
                 manager.startMonitoringSignificantLocationChanges()
                 manager.startMonitoringVisits()
                 if let h = home, !trackingMode.isRoaming {
@@ -591,6 +712,17 @@ extension LocationCoordinator: CLLocationManagerDelegate {
     public nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let snapshot = locations
         Task { @MainActor in
+            guard monitoringActive else {
+                // An explicit one-shot Home request may be in flight while
+                // passive recording is off. Resolve it without recording it.
+                if let cont = freshFixContinuation,
+                   let fix = snapshot.last(where: { Self.isHomeFix($0) }) {
+                    freshFixContinuation = nil
+                    freshFixRequestId = nil
+                    cont.resume(returning: fix)
+                }
+                return
+            }
             // Every iOS event into the app counts as "alive" — push the
             // dead-man notification forward. Cheap; safe to call always.
             onWake?()
@@ -632,6 +764,7 @@ extension LocationCoordinator: CLLocationManagerDelegate {
     public nonisolated func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
         let id = region.identifier
         Task { @MainActor in
+            guard monitoringActive else { return }
             onWake?()
             if id == ActivityEngine.homeGeofenceId {
                 log.record("geofence", "entered home")
@@ -645,6 +778,7 @@ extension LocationCoordinator: CLLocationManagerDelegate {
     public nonisolated func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
         let id = region.identifier
         Task { @MainActor in
+            guard monitoringActive else { return }
             onWake?()
             if id == ActivityEngine.homeGeofenceId {
                 log.record("geofence", "exited home")
@@ -666,6 +800,7 @@ extension LocationCoordinator: CLLocationManagerDelegate {
         let id = region.identifier
         let rs = state
         Task { @MainActor in
+            guard monitoringActive else { return }
             let s = rs == .inside ? "inside" : rs == .outside ? "outside" : "unknown"
             log.record("geofence.state", "\(id)=\(s)")
             // Boot reconciliation: fires on launch via requestState(for: home).
@@ -698,6 +833,7 @@ extension LocationCoordinator: CLLocationManagerDelegate {
         let coord = visit.coordinate
         let horiz = visit.horizontalAccuracy
         Task { @MainActor in
+            guard monitoringActive else { return }
             onWake?()
             let pseudo = CLLocation(
                 coordinate: coord,
@@ -713,6 +849,8 @@ extension LocationCoordinator: CLLocationManagerDelegate {
                 self.isDwelling = true
                 self.dwellingSince = pseudo.timestamp
                 self.dwellingCoord = coord
+                self.dwellingAccuracy = horiz
+                self.dwellingHasFullAccuracyAuthorization = accuracyStatus == .fullAccuracy
                 self.dwellingPlaceLabel = nil
                 onContextChanged?()
                 // The ActivityEngine owns dwell/place creation; CLVisit is a
@@ -722,6 +860,8 @@ extension LocationCoordinator: CLLocationManagerDelegate {
                 self.dwellingSince = nil
                 self.dwellingPlaceLabel = nil
                 self.dwellingCoord = nil
+                self.dwellingAccuracy = nil
+                self.dwellingHasFullAccuracyAuthorization = nil
                 onContextChanged?()
             }
         }
@@ -731,6 +871,7 @@ extension LocationCoordinator: CLLocationManagerDelegate {
 // MARK: - LocationControlling (the seam the ActivityEngine commands)
 extension LocationCoordinator: LocationControlling {
     public func setContinuous(_ decision: SamplingDecision) {
+        guard monitoringActive else { return }
         manager.desiredAccuracy = decision.accuracy
         manager.activityType = decision.activityType
         // Background-safe config: NO numeric distanceFilter (it triggers iOS
@@ -767,6 +908,7 @@ extension LocationCoordinator: LocationControlling {
     }
 
     public func armGeofence(id: String, center: CLLocationCoordinate2D, radius: CLLocationDistance) {
+        guard monitoringActive else { return }
         for r in manager.monitoredRegions where r.identifier == id {
             manager.stopMonitoring(for: r)
         }
@@ -785,6 +927,7 @@ extension LocationCoordinator: LocationControlling {
     }
 
     public func requestState(id: String) {
+        guard monitoringActive else { return }
         for r in manager.monitoredRegions where r.identifier == id {
             manager.requestState(for: r)
         }

@@ -199,25 +199,101 @@ struct ActivityEngineTests {
         #expect(backend.segmentTypesInOrder == ["transit"])
     }
 
-    @Test("Walking out the front door starts a no-GPS walk outing")
+    @Test("Walking out the front door starts a walk outing that records in transit with GPS on")
     func walkFromHome() async {
         let (engine, control, backend, clock) = engineWithClock()
         engine._setRegimeForTest(.walking, .high)
 
         await engine.handle(.homeExit(at: clock.date))
-        #expect(engine.state.phase == .onSite)
+        #expect(engine.state.phase == .transit)
         #expect(engine.state.outingMode == "walk")
-        #expect(!control.continuousOn)               // GPS never armed for a walk
-        #expect(backend.segmentTypesInOrder == ["onfoot"])
+        #expect(control.continuousOn)                // GPS armed for the walk
+        #expect(backend.segmentTypesInOrder == ["transit"])
+
+        // Walking on is the outing itself, never an arrival.
+        clock.advance(30)
+        await engine.handle(.sample(lat: 40.0, lng: east(of: -86.0, meters: 40), speed: 1.3, at: clock.date))
+        await engine.handle(.motion(.walking, .high))
+        #expect(engine.state.phase == .transit)
+        #expect(backend.places.isEmpty)
 
         clock.advance(600)
         await engine.handle(.homeEnter(at: clock.date))
         #expect(engine.state.phase == .atHome)
+        #expect(!control.continuousOn)
         #expect(backend.outings.first?.mode == "walk")
+        #expect(backend.segmentTypesInOrder == ["transit"])
     }
 
-    @Test("Roaming on foot out of the dwell fence re-anchors instead of departing")
-    func bigParkRoam() async {
+    @Test("Every departure begins in transit whatever Motion says, and with no classification at all")
+    func departuresAlwaysBeginInTransit() async {
+        for regime in [MotionCoordinator.MotionState.walking, .running, .stationary, .unknown, .cycling, .automotive] {
+            let (engine, control, backend, clock) = engineWithClock()
+            engine._setRegimeForTest(regime, regime == .unknown ? .low : .high)
+            await engine.handle(.homeExit(at: clock.date))
+            #expect(engine.state.phase == .transit, "\(regime) departure must be transit")
+            #expect(control.continuousOn, "\(regime) departure must arm GPS")
+            #expect(backend.segmentTypesInOrder == ["transit"], "\(regime) departure opens a transit segment")
+            #expect(backend.outings.first?.mode == (regime == .walking ? "walk" : "drive"))
+        }
+        // Boot reconciliation after a missed exit is a departure too.
+        let (engine, control, _, _) = engineWithClock()
+        engine._setRegimeForTest(.walking, .high)
+        await engine.handle(.reconcile(homeInside: false))
+        #expect(engine.state.phase == .transit)
+        #expect(control.continuousOn)
+    }
+
+    @Test("Walking after a vehicle leg is an arrival; walking after walking is not")
+    func walkingArrivalOnlyAfterAVehicle() async {
+        let (engine, _, backend, clock) = engineWithClock()
+        engine._setRegimeForTest(.automotive, .high)
+        await engine.handle(.homeExit(at: clock.date))
+        clock.advance(60)
+        await engine.handle(.sample(lat: 40.0, lng: east(of: -86.0, meters: 1000), speed: 15, at: clock.date))
+        clock.advance(20)
+        await engine.handle(.motion(.walking, .high))         // got out of the car
+        #expect(engine.state.phase == .onSite)
+        #expect(backend.places.count == 1)
+
+        let (walk, _, walkBackend, walkClock) = engineWithClock()
+        walk._setRegimeForTest(.walking, .high)
+        await walk.handle(.homeExit(at: walkClock.date))
+        walkClock.advance(60)
+        await walk.handle(.sample(lat: 40.0, lng: east(of: -86.0, meters: 80), speed: 1.3, at: walkClock.date))
+        await walk.handle(.motion(.stationary, .medium))
+        await walk.handle(.motion(.walking, .high))            // a pause at a crossing, then on
+        #expect(walk.state.phase == .transit)
+        #expect(walkBackend.places.isEmpty)
+    }
+
+    @Test("A walk after a rest returns to transit for any non-stationary state")
+    func walkingAfterRestReturnsToTransit() async {
+        for regime in [MotionCoordinator.MotionState.walking, .running, .unknown, .cycling, .automotive] {
+            let (engine, control, backend, clock) = engineWithClock()
+            engine._setRegimeForTest(.automotive, .high)
+            await engine.handle(.homeExit(at: clock.date))
+            let lng = east(of: -86.0, meters: 1500)
+            await engine.handle(.sample(lat: 40.0, lng: lng, speed: 0, at: clock.date))
+            clock.advance(ActivityEngine.dwellConfirmSeconds + 1)
+            await engine.handle(.sample(lat: 40.0, lng: lng, speed: 0, at: clock.date))
+            #expect(engine.state.phase == .onSite)
+            #expect(!control.continuousOn)
+
+            clock.advance(300)
+            engine._setRegimeForTest(regime, regime == .unknown ? .low : .high)
+            await engine.handle(.dwellExit(lat: 40.0, lng: east(of: -86.0, meters: 1700), at: clock.date))
+            #expect(engine.state.phase == .transit, "\(regime) out of the fence is a departure")
+            #expect(control.continuousOn, "\(regime) out of the fence turns GPS back on")
+            #expect(backend.segmentTypesInOrder == ["transit", "dwell", "transit"])
+            #expect(backend.outings.first?.endedAt == nil)
+            // A drive that continues on foot stays a drive; only a vehicle relabels a walk.
+            #expect(backend.outings.first?.mode == "drive")
+        }
+    }
+
+    @Test("A fence exit while Motion still says stationary re-anchors the rest instead of departing")
+    func stationaryFenceExitReanchors() async {
         let (engine, control, backend, clock) = engineWithClock()
         engine._setRegimeForTest(.automotive, .high)
         await engine.handle(.homeExit(at: clock.date))
@@ -227,14 +303,44 @@ struct ActivityEngineTests {
         await engine.handle(.sample(lat: 40.0, lng: lng, speed: 0, at: clock.date))
         #expect(engine.state.phase == .onSite)
 
-        // Walk out of the fence (motion=walking, not a vehicle): stay OnSite.
         clock.advance(120)
-        engine._setRegimeForTest(.walking, .high)
+        engine._setRegimeForTest(.stationary, .high)
         let newLng = east(of: -86.0, meters: 1700)
         await engine.handle(.dwellExit(lat: 40.0, lng: newLng, at: clock.date))
-        #expect(engine.state.phase == .onSite)       // did NOT promote to transit
-        #expect(!control.continuousOn)               // GPS stayed off
+        #expect(engine.state.phase == .onSite)
+        #expect(!control.continuousOn)
+        #expect(engine.state.dwellAnchorLng == newLng)
+        #expect(engine.state.dwellSince == clock.date)
         #expect(backend.outings.first?.endedAt == nil)
+    }
+
+    @Test("A walk that stops for 150 s becomes a rest, and walking on records the next leg")
+    func walkRestWalk() async {
+        let (engine, control, backend, clock) = engineWithClock()
+        engine._setRegimeForTest(.walking, .high)
+        await engine.handle(.homeExit(at: clock.date))
+        let bench = east(of: -86.0, meters: 900)
+        for step in 1...9 {
+            clock.advance(60)
+            await engine.handle(.sample(lat: 40.0, lng: east(of: -86.0, meters: Double(step) * 100), speed: 1.4, at: clock.date))
+        }
+        // Sit on the bench.
+        clock.advance(10)
+        await engine.handle(.sample(lat: 40.0, lng: bench, speed: 0, at: clock.date))
+        clock.advance(ActivityEngine.dwellConfirmSeconds + 1)
+        await engine.handle(.sample(lat: 40.0, lng: bench, speed: 0, at: clock.date))
+        #expect(engine.state.phase == .onSite)
+        #expect(!control.continuousOn)
+        #expect(backend.places.count == 1)
+
+        // Twenty minutes later, walk on out of the fence.
+        clock.advance(20 * 60)
+        await engine.handle(.dwellExit(lat: 40.0, lng: east(of: -86.0, meters: 1050), at: clock.date))
+        #expect(engine.state.phase == .transit)
+        #expect(control.continuousOn)
+        #expect(engine.state.outingMode == "walk")
+        #expect(backend.segmentTypesInOrder == ["transit", "dwell", "transit"])
+        #expect(backend.segments[backend.segmentOrder[1]]?.endedAt == clock.date)
     }
 
     @Test("A second home-exit (jitter / cold-wake) does not start a duplicate outing")
@@ -302,18 +408,36 @@ struct ActivityEngineTests {
 
     @Test("A walk outing that later drives is relabeled mixed")
     func driveAfterWalkMarksMixed() async {
-        let (engine, _, backend, clock) = engineWithClock()
+        let (engine, control, backend, clock) = engineWithClock()
         engine._setRegimeForTest(.walking, .high)
-        await engine.handle(.homeExit(at: clock.date))   // walk outing (GPS off)
-        #expect(engine.state.phase == .onSite)
+        await engine.handle(.homeExit(at: clock.date))   // walk outing, recording in transit
+        #expect(engine.state.phase == .transit)
         #expect(backend.outings.first?.mode == "walk")
+        let armings = control.calls.filter { $0 == .setContinuous }.count
 
         // Get in a car and drive off (motion classifies automotive).
         clock.advance(300)
-        engine._setRegimeForTest(.automotive, .high)
         await engine.handle(.motion(.automotive, .high))
         #expect(engine.state.phase == .transit)
         #expect(backend.outings.first?.mode == "mixed")  // walked then drove
+        #expect(control.calls.filter { $0 == .setContinuous }.count == armings + 1)   // resampled for the drive
+
+        // A legacy on-foot outing persisted by an older build still departs.
+        var st = EngineState()
+        st.phase = .onSite
+        st.clientOutingId = "legacy"
+        st.outingMode = "walk"
+        st.currentClientSegmentId = "seg"
+        st.currentSegmentType = "onfoot"
+        let legacyBackend = FakeBackend()
+        let legacy = ActivityEngine(
+            control: FakeControl(), backend: legacyBackend,
+            home: { (lat: 40.0, lng: -86.0, radius: 75) },
+            now: { clock.t }, state: st, persist: { _ in }
+        )
+        await legacy.handle(.motion(.automotive, .high))
+        #expect(legacy.state.phase == .transit)
+        #expect(legacy.state.outingMode == "mixed")
     }
 
     @Test("Bootstrap in OnSite re-arms the dwell fence AND requests its state (cold-wake exit catch)")

@@ -180,6 +180,11 @@ import Testing
         let pending = f.tracker.pendingUploads
         f.tracker.stop()
         #expect(f.motionDriver.stops == 1)
+        #expect(!f.tracker.location.monitoringActive)
+        #expect(f.radio.calls.contains("slc.stop"))
+        #expect(f.radio.calls.contains("visits.stop"))
+        #expect(f.radio.calls.contains("gps.stop"))
+        #expect(f.radio.monitoredRegions.isEmpty)
         #expect(f.tracker.pendingUploads == pending)   // stop is not a delete
 
         // A fresh tracker over the same directory replays what stop preserved.
@@ -193,5 +198,51 @@ import Testing
         await reopened.drainUploads()
         #expect(recovered.events.count == pending)
         #expect(reopened.pendingUploads == 0)
+    }
+
+    /// The durable log is the only copy of a background walk until the host's
+    /// consumer has the app in the foreground to persist it. While the host says
+    /// it is in the background, the tracker records but never acknowledges.
+    @Test func backgroundKeepsTheLogUntilTheForegroundDrainsIt() async {
+        let f = TrackerFixture(); defer { f.clean() }
+        f.tracker.bootstrap()
+        await f.send([f.fix()])
+        let delivered = f.uploads.events.count
+        #expect(f.tracker.pendingUploads == 0)
+
+        f.tracker.onBackground()
+        #expect(f.tracker.drainsSuspended)
+        f.tracker.location.locationManager(f.sender, didUpdateLocations: [f.fix(lat: 40.001), f.fix(lat: 40.002)])
+        for _ in 0..<200 { await Task.yield() }
+        await f.tracker.drainUploads()
+        #expect(f.tracker.pendingUploads == 2)           // both fixes kept in the log
+        #expect(f.uploads.events.count == delivered)     // nothing acknowledged in the background
+        #expect(f.tracker.lastUploadError == nil)
+
+        // A tracker built over the same directory in a background launch keeps them too.
+        f.tracker.onForeground()
+        await f.settle { f.tracker.pendingUploads == 0 }
+        #expect(!f.tracker.drainsSuspended)
+        #expect(f.uploads.events.count == delivered + 2)
+        #expect(f.uploads.events.suffix(2).allSatisfy { $0.kind == .sample })
+    }
+
+    @Test func bootstrapAfterStopRearmsSensorsAndDrainsPreservedEvents() async {
+        let f = TrackerFixture(); defer { f.clean() }
+        f.uploads.failures = 1
+        f.tracker.bootstrap()
+        f.tracker.location.locationManager(f.sender, didUpdateLocations: [f.fix()])
+        await f.settle { f.tracker.pendingUploads > 0 && f.tracker.lastUploadError != nil }
+
+        f.tracker.stop()
+        let pending = f.tracker.pendingUploads
+        #expect(pending > 0)
+        f.tracker.bootstrap()
+        await f.settle { f.tracker.pendingUploads == 0 }
+
+        #expect(f.motionDriver.starts == 2)
+        #expect(f.radio.calls.filter { $0 == "slc.start" }.count == 2)
+        #expect(f.radio.calls.filter { $0 == "visits.start" }.count == 2)
+        #expect(f.uploads.kinds.contains(.sample))
     }
 }

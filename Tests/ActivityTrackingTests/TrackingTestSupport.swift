@@ -61,7 +61,8 @@ import Testing
             motion: MotionCoordinator(driver: motionDriver), driver: radio, mode: mode)
     }
     func clean() {
-        coordinator.stopContinuous(); coordinator.motion.stop()
+        coordinator.motion.stop()
+        coordinator.suspendMonitoring()
         defaults.removePersistentDomain(forName: suite)
         stateDefaults.removePersistentDomain(forName: stateSuite)
     }

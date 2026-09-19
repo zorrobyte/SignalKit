@@ -17,9 +17,11 @@ Create retained services in the host composition root, not in a view's body. Cho
 CoreLocation has process-wide/scheduling constraints and the tracker is designed as one process-lifetime service. HealthSync.stop cancels registered observers/retries and cooperative work; a native callback or submitted server operation can still complete. Hosts needing account switching should design an explicit drain/quarantine-and-recreate boundary, rather than just changing a global user ID.
 
 `ActivityTracker` owns this wiring for location: `bootstrap()` at launch,
-`onForeground()` on foreground entry, `drainUploads()` on network recovery and in
-a BGProcessing handler, and `stop()` to halt observation and retries while
-preserving durable events. Retain it for the process lifetime. Assign presentation
+`onForeground()` on foreground entry, `onBackground()` when the host's consumer
+can no longer persist what it receives (the log is then kept intact until the next
+foreground), `drainUploads()` on network recovery and in a BGProcessing handler,
+and `stop()` to halt observation and retries while preserving durable events.
+Retain it for the process lifetime. Assign presentation
 callbacks on the tracker rather than on `tracker.location`, which it wires to
 drive the outbox. `HealthSyncCoordinator` is the same shape for health.
 

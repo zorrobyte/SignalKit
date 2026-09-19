@@ -136,23 +136,43 @@ public final class ActivityTracker {
         uploadNow()
     }
 
-    /// Call on foreground entry. Re-evaluates tracking state (which recognizes a
-    /// rest that completed while suspended, in roaming mode) and uploads.
+    /// Call on foreground entry. Resumes drains after `onBackground()`,
+    /// re-evaluates tracking state (which recognizes a rest that completed while
+    /// suspended, in roaming mode) and uploads.
     public func onForeground() {
-        Task { @MainActor in
-            await location.refreshTrackingState()
-            await drainUploads()
-        }
+        Task { @MainActor in await enterForeground() }
     }
+
+    /// The awaitable form of `onForeground()`, for a host that must order its
+    /// own reconciliation after the log's backlog has been delivered.
+    public func enterForeground() async {
+        output.resumeDrains()
+        await location.refreshTrackingState()
+        await drainUploads()
+    }
+
+    /// Call when the app leaves the foreground and its consumer can no longer
+    /// persist what it receives. Recording continues and the durable log keeps
+    /// every event; nothing is acknowledged or deleted until `onForeground()`.
+    /// A host whose uploader is a server that persists on its own need not call
+    /// this.
+    public func onBackground() {
+        output.suspendDrains()
+    }
+
+    /// True between `onBackground()` and the next `onForeground()`.
+    public var drainsSuspended: Bool { output.drainsSuspended }
 
     /// Await the active upload pass. Use on network recovery and in a
     /// BGProcessing handler; end the background task exactly once afterwards.
     public func drainUploads() async { await output.drain() }
 
-    /// Stop observation and retries. Durable events are preserved for replay.
+    /// Stop motion, every location service, and retries. Durable events and
+    /// engine state are preserved; calling `bootstrap()` resumes them.
     /// This is not an account-deletion API and does not undo a sent upload.
     public func stop() {
         motion.stop()
+        location.suspendMonitoring()
         output.stop()
     }
 
