@@ -1,5 +1,5 @@
 // Generated from public HealthKit SDK headers. Regenerate with Scripts/generate-health-catalog.mjs.
-// Includes 209 identifier-based types; specialized types are added by HealthTypeCatalog.
+// Includes 212 identifier-based types; specialized types are added by HealthTypeCatalog.
 import HealthKit
 
 extension HealthTypeCatalog {
@@ -50,6 +50,7 @@ extension HealthTypeCatalog {
         if #available(iOS 16.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierAtrialFibrillationBurden")), .quantity) }
         if #available(iOS 8.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierHeartRate")), .quantity) }
         if #available(iOS 16.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierHeartRateRecoveryOneMinute")), .quantity) }
+        if #available(iOS 27.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierHeartRateVariabilityRMSSD")), .quantity) }
         if #available(iOS 11.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierHeartRateVariabilitySDNN")), .quantity) }
         if #available(iOS 8.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierPeripheralPerfusionIndex")), .quantity) }
         if #available(iOS 11.0, *) { append(HKObjectType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: "HKQuantityTypeIdentifierRestingHeartRate")), .quantity) }
@@ -136,6 +137,7 @@ extension HealthTypeCatalog {
         if #available(iOS 15.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierAppleWalkingSteadinessEvent")), .category) }
         if #available(iOS 14.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierHandwashingEvent")), .category) }
         if #available(iOS 13.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierToothbrushingEvent")), .category) }
+        if #available(iOS 27.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierBleedingAfterMenopause")), .category) }
         if #available(iOS 18.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierBleedingAfterPregnancy")), .category) }
         if #available(iOS 18.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierBleedingDuringPregnancy")), .category) }
         if #available(iOS 9.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierCervicalMucusQuality")), .category) }
@@ -144,6 +146,7 @@ extension HealthTypeCatalog {
         if #available(iOS 9.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierIntermenstrualBleeding")), .category) }
         if #available(iOS 16.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierIrregularMenstrualCycles")), .category) }
         if #available(iOS 14.3, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierLactation")), .category) }
+        if #available(iOS 27.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierMenopausalState")), .category) }
         if #available(iOS 9.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierMenstrualFlow")), .category) }
         if #available(iOS 9.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierOvulationTestResult")), .category) }
         if #available(iOS 16.0, *) { append(HKObjectType.categoryType(forIdentifier: HKCategoryTypeIdentifier(rawValue: "HKCategoryTypeIdentifierPersistentIntermenstrualBleeding")), .category) }
