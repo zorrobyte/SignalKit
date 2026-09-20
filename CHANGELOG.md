@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `LocationSample` carries optional `nativeVisitArrivalTimestamp` and `nativeVisitDepartureTimestamp` (Unix milliseconds). Both are present only on a `visit-departure` sample produced by a completed `CLVisit` with finite, ordered dates; arrival-only callbacks and engine-inferred closures leave them nil. Older persisted samples decode with both nil.
 - Preserve all six native motion flags, including explicit `unknown`, in Equatable `MotionObservation` snapshots.
 - Expose `MotionCoordinator.latestObservation` and `onObservation` for complete observations, including overlapping flags, repeats, and low confidence, without replacing the engine's filtered callback.
 - Expose `confirmedState`, the last known medium/high-confidence classification. Existing `state` and `onChange` behavior are unchanged.

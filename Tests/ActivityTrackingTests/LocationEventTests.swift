@@ -17,6 +17,25 @@ private final class SyntheticVisit: CLVisit, @unchecked Sendable {
 }
 
 @MainActor struct LocationEventTests {
+    @Test func nativeVisitPairPreservesOriginalEndpointsThroughPersistence() async throws {
+        let f = TrackingFixture(); defer { f.clean() }
+        f.coordinator.bootstrap()
+        await f.settle { f.output.flushes == 1 }
+        let arrival = Date(timeIntervalSince1970: 1_789_603_200)
+        let departure = arrival.addingTimeInterval(72 * 3600)
+        f.coordinator.locationManager(f.nativeCallbackSender,
+            didVisit: SyntheticVisit(arrival: arrival, departure: departure))
+        await f.settle { !f.output.samples.isEmpty }
+        let sample = try #require(f.output.samples.last)
+        #expect(sample.nativeVisitArrivalTimestamp == arrival.timeIntervalSince1970 * 1000)
+        #expect(sample.nativeVisitDepartureTimestamp == departure.timeIntervalSince1970 * 1000)
+        #expect(sample.timestamp == departure.timeIntervalSince1970 * 1000)
+        #expect(try JSONDecoder().decode(LocationSample.self, from: JSONEncoder().encode(sample)) == sample)
+        f.coordinator.locationManager(f.nativeCallbackSender,
+            didVisit: SyntheticVisit(arrival: arrival, departure: .distantFuture))
+        await f.settle { f.output.samples.count == 2 }
+        #expect(f.output.samples.last?.nativeVisitDepartureTimestamp == nil)
+    }
     func home(_ f: TrackingFixture) -> CLCircularRegion {
         f.coordinator.home = .init(lat: 40, lng: -86, accuracy: 5, radius: 75, setAt: Date())
         return CLCircularRegion(center: .init(latitude: 40, longitude: -86), radius: 75, identifier: "home")

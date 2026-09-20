@@ -15,13 +15,20 @@ public struct LocationSample: Codable, Sendable, Equatable {
     public let source: String
     public let altitude: Double?
     public let speed: Double?
+    /// Original paired CLVisit endpoints in Unix milliseconds. Present together only
+    /// on a completed native visit, never on inferred engine/foreground closures.
+    public let nativeVisitArrivalTimestamp: Double?
+    public let nativeVisitDepartureTimestamp: Double?
     public init(clientOutingId: String?, timestamp: Double, lat: Double, lng: Double,
                 accuracy: Double, source: String, altitude: Double? = nil, speed: Double? = nil,
-                hasFullAccuracyAuthorization: Bool = true) {
+                hasFullAccuracyAuthorization: Bool = true,
+                nativeVisitArrivalTimestamp: Double? = nil, nativeVisitDepartureTimestamp: Double? = nil) {
         self.clientOutingId = clientOutingId; self.timestamp = timestamp
         self.lat = lat; self.lng = lng; self.accuracy = accuracy
         self.hasFullAccuracyAuthorization = hasFullAccuracyAuthorization
         self.source = source; self.altitude = altitude; self.speed = speed
+        self.nativeVisitArrivalTimestamp = nativeVisitArrivalTimestamp
+        self.nativeVisitDepartureTimestamp = nativeVisitDepartureTimestamp
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -34,6 +41,7 @@ public struct LocationSample: Codable, Sendable, Equatable {
         case source
         case altitude
         case speed
+        case nativeVisitArrivalTimestamp, nativeVisitDepartureTimestamp
     }
 
     /// Samples written before authorization fidelity was retained came from
@@ -50,6 +58,8 @@ public struct LocationSample: Codable, Sendable, Equatable {
         source = try container.decode(String.self, forKey: .source)
         altitude = try container.decodeIfPresent(Double.self, forKey: .altitude)
         speed = try container.decodeIfPresent(Double.self, forKey: .speed)
+        nativeVisitArrivalTimestamp = try container.decodeIfPresent(Double.self, forKey: .nativeVisitArrivalTimestamp)
+        nativeVisitDepartureTimestamp = try container.decodeIfPresent(Double.self, forKey: .nativeVisitDepartureTimestamp)
     }
 }
 

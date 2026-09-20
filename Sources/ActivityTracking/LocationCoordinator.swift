@@ -523,7 +523,8 @@ public final class LocationCoordinator: NSObject {
     }
 
     // ─── Sample append ───────────────────────────────────────────────
-    private func appendSample(_ location: CLLocation, source: String) async {
+    private func appendSample(_ location: CLLocation, source: String,
+        nativeVisitArrival: Date? = nil, nativeVisitDeparture: Date? = nil) async {
         // Gate noisy fixes from live GPS sources before they reach lastSample,
         // the Live Activity, or the WAL. Visit events bypass the gate: they're
         // discrete arrivals/departures whose pseudo-locations carry
@@ -592,7 +593,9 @@ public final class LocationCoordinator: NSObject {
             source: source,
             altitude: altitude,
             speed: speed,
-            hasFullAccuracyAuthorization: accuracyStatus == .fullAccuracy
+            hasFullAccuracyAuthorization: accuracyStatus == .fullAccuracy,
+            nativeVisitArrivalTimestamp: nativeVisitArrival.map { $0.timeIntervalSince1970 * 1000 },
+            nativeVisitDepartureTimestamp: nativeVisitDeparture.map { $0.timeIntervalSince1970 * 1000 }
         ))
     }
 
@@ -842,7 +845,10 @@ extension LocationCoordinator: CLLocationManagerDelegate {
                 verticalAccuracy: -1,
                 timestamp: isArrival ? arrival : departure
             )
-            await appendSample(pseudo, source: isArrival ? "visit-arrival" : "visit-departure")
+            let hasPair = !isArrival && arrival != .distantPast && departure > arrival
+                && arrival.timeIntervalSince1970.isFinite && departure.timeIntervalSince1970.isFinite
+            await appendSample(pseudo, source: isArrival ? "visit-arrival" : "visit-departure",
+                nativeVisitArrival: hasPair ? arrival : nil, nativeVisitDeparture: hasPair ? departure : nil)
             log.record("visit", "isArrival=\(isArrival) at=\(coord.latitude),\(coord.longitude)")
 
             if isArrival {

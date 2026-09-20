@@ -200,7 +200,7 @@ These values reach the backend and persisted state as plain strings. Treat them 
 | Outing/session `source` | `slc-auto` (significant-change wake), `boot-reconcile` (state repaired at launch), `roaming` (departure in roaming mode) |
 | `LocationSample.source` | `continuous`, `slc`, `visit-arrival`, `visit-departure` |
 
-`LocationSample` is Codable/Equatable/Sendable: optional client outing ID, Unix-millisecond timestamp, degree coordinates, meter accuracy/altitude, source string, and optional speed in meters/second. Invalid altitude/speed measurements are nil. Visit observations and session samples do not claim a GPS outing parent.
+`LocationSample` is Codable/Equatable/Sendable: optional client outing ID, Unix-millisecond timestamp, degree coordinates, meter accuracy/altitude, source string, optional speed in meters/second, and optional `nativeVisitArrivalTimestamp`/`nativeVisitDepartureTimestamp` (Unix milliseconds) that are set together only on a `visit-departure` sample backed by a completed `CLVisit`, so a host can recover the original native stay window instead of inferring it. Invalid altitude/speed measurements are nil. Visit observations and session samples do not claim a GPS outing parent.
 
 `LocationControlling` supplies `setContinuous`, `stopContinuous`, `armGeofence`, `removeGeofence`, and `requestState`. If integrating a custom sensor driver, preserve those semantics and return actual region-state observations through engine events.
 
