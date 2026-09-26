@@ -98,7 +98,7 @@ Initialization configures a location manager and restores saved home/settings. C
 | `currentOutingStartedAt`, `currentMaxDistanceMeters`, `currentOutingIsSession` | Current engine outing's start, maximum home distance, and legacy session flag |
 | `enginePhase` | Mirror of the engine's at-home, transit, on-site, or session phase |
 | `isDwelling`, `dwellingSince`, `dwellingPlaceLabel`, `dwellingCoord` | Presentation context from engine state and secondary visit observations |
-| `highAccuracyGPS` | Persisted switch disabling software distance thinning for denser transit samples |
+| `highAccuracyGPS` | Persisted switch for a sustained dense transit track: disables software thinning, turns auto-pause off, holds a background session and shows the background location indicator. Off lets iOS pause background transit GPS and shows no indicator |
 | `continuousActive` | Whether continuous updates have been armed; not a guarantee that iOS is delivering fixes |
 | `lastError` | User-relevant on-demand home-setting failure, if any |
 
@@ -139,7 +139,7 @@ Live fixes are rejected if accuracy is negative or over 100 meters, if more than
 
 The automatic classifier does not distinguish vehicle drivers from passengers or supply workout categories such as hiking, swimming, or skiing. Those need separate sources; they must not be presented as native motion classifications. `MotionActivityDriving` provides availability, authorization status, `start(_:)`, and `stop()`. Handlers run on the main actor. The native implementation translates CoreMotion callbacks into value snapshots.
 
-`LocationDriving` abstracts the radio configuration and monitoring operations. `CoreLocationDriver` forwards to CLLocationManager, except that it refuses to enable `allowsBackgroundLocationUpdates` when `CoreLocationDriver.hostDeclaresLocationBackgroundMode` is false — CoreLocation raises an uncatchable Objective-C exception there, and a library must not terminate its host over a host configuration omission. Its `beginBackgroundActivity()` returns the matching invalidation closure; the coordinator retains exactly one lease while transit GPS is active and invalidates it when stopping. A fake driver must preserve callback semantics, not implement the state machine itself.
+`LocationDriving` abstracts the radio configuration and monitoring operations. `CoreLocationDriver` forwards to CLLocationManager, except that it refuses to enable `allowsBackgroundLocationUpdates` when `CoreLocationDriver.hostDeclaresLocationBackgroundMode` is false — CoreLocation raises an uncatchable Objective-C exception there, and a library must not terminate its host over a host configuration omission. Its `beginBackgroundActivity()` returns the matching invalidation closure; the coordinator retains exactly one lease while transit GPS is active with `highAccuracyGPS` on, and invalidates it when stopping or when the switch turns off. A fake driver must preserve callback semantics, not implement the state machine itself.
 
 ## ActivityEngine
 

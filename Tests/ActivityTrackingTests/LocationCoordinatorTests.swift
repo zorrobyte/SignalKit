@@ -12,7 +12,7 @@ import Testing
         #expect(f.radio.calls.filter { $0 == "slc.start" }.count == 1)
         #expect(f.radio.calls.contains("visits.start") && f.radio.calls.contains("fix"))
         #expect(wakes == 1 && f.coordinator.canGetFix)
-        #expect(f.radio.allowsBackgroundLocationUpdates && f.radio.showsBackgroundLocationIndicator)
+        #expect(f.radio.allowsBackgroundLocationUpdates && !f.radio.showsBackgroundLocationIndicator)
     }
     @Test func permissionsUseCorrectStagesAndPrecisePurposeKey() {
         let f = TrackingFixture(authorized: .notDetermined, precise: .reducedAccuracy); defer { f.clean() }
@@ -94,8 +94,7 @@ import Testing
         let decision = SamplingDecision(accuracy: 10, distanceFilter: 60, activityType: .fitness)
         f.coordinator.setContinuous(decision); f.coordinator.setContinuous(decision)
         #expect(f.radio.calls.filter { $0 == "gps.start" }.count == 1)
-        #expect(f.radio.calls.filter { $0 == "background.start" }.count == 1)
-        #expect(f.radio.distanceFilter == kCLDistanceFilterNone && !f.radio.pausesLocationUpdatesAutomatically)
+        #expect(f.radio.distanceFilter == kCLDistanceFilterNone)
         await f.send([f.fix()]); await f.send([f.fix()])
         #expect(f.output.samples.count == 1)
         f.coordinator.highAccuracyGPS = true
@@ -106,6 +105,32 @@ import Testing
         #expect(f.radio.calls.filter { $0 == "gps.stop" }.count == 1)
         #expect(f.radio.calls.filter { $0 == "background.end" }.count == 1)
         #expect(!f.coordinator.continuousActive && f.radio.pausesLocationUpdatesAutomatically)
+    }
+    @Test func backgroundKeepAliveOnlyWithHighAccuracyGPS() async {
+        let f = TrackingFixture(); defer { f.clean() }
+        f.coordinator.bootstrap()
+        await f.settle { f.output.flushes == 1 }
+        f.coordinator.home = .init(lat: 40, lng: -86, accuracy: 5, radius: 75, setAt: Date())
+        #expect(!f.radio.showsBackgroundLocationIndicator)
+        let decision = SamplingDecision(accuracy: 10, distanceFilter: 60, activityType: .fitness)
+        // Off (default): iOS may pause the stream; no session, no blue pill.
+        f.coordinator.setContinuous(decision)
+        #expect(f.radio.calls.contains("gps.start"))
+        #expect(!f.radio.calls.contains("background.start"))
+        #expect(f.radio.pausesLocationUpdatesAutomatically && !f.radio.showsBackgroundLocationIndicator)
+        // On mid-leg: sustained stream held alive by the session, indicator shown.
+        f.coordinator.highAccuracyGPS = true
+        #expect(f.radio.calls.filter { $0 == "background.start" }.count == 1)
+        #expect(!f.radio.pausesLocationUpdatesAutomatically && f.radio.showsBackgroundLocationIndicator)
+        f.coordinator.setContinuous(decision)
+        #expect(f.radio.calls.filter { $0 == "background.start" }.count == 1)
+        // Off again mid-leg: session released, stream keeps running unsustained.
+        f.coordinator.highAccuracyGPS = false
+        #expect(f.radio.calls.filter { $0 == "background.end" }.count == 1)
+        #expect(f.radio.pausesLocationUpdatesAutomatically && !f.radio.showsBackgroundLocationIndicator)
+        #expect(f.coordinator.continuousActive)
+        f.coordinator.stopContinuous()
+        #expect(f.radio.calls.filter { $0 == "background.end" }.count == 1)
     }
     @Test func geofenceReplacementKeepsUnrelatedRegions() {
         let f = TrackingFixture(); defer { f.clean() }
@@ -179,6 +204,7 @@ import Testing
         let f = TrackingFixture(); defer { f.clean() }
         f.coordinator.setHome(.init(lat: 40, lng: -86, accuracy: 5, radius: 75, setAt: Date()))
         f.coordinator.bootstrap()
+        f.coordinator.highAccuracyGPS = true   // takes the background session
         f.coordinator.setContinuous(.init(accuracy: 10, distanceFilter: 60, activityType: .fitness))
         f.coordinator.armGeofence(
             id: "dwell",

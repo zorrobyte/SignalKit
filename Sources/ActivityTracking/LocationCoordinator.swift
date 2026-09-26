@@ -66,11 +66,12 @@ public final class LocationCoordinator: NSObject {
     /// intentionally passive: constructing a coordinator must not arm radios.
     public private(set) var monitoringActive = false
     // Sustained high-accuracy GPS. Default off: iOS is allowed to pause the
-    // continuous stream (pausesLocationUpdatesAutomatically = true), which
-    // throttles fixes to brief windows — low power, coarse route, dwells still
-    // detected. On: keep the stream alive (pause off) for a dense continuous
-    // track. Only flips the pause flag; continuous GPS is armed in transit
-    // either way, so dwell detection is unaffected.
+    // continuous stream (pausesLocationUpdatesAutomatically = true) and nothing
+    // holds the app alive in the background, so there is no blue location
+    // indicator — low power, coarse route, dwells still detected. On: pause
+    // off, a CLBackgroundActivitySession for the transit leg and the
+    // background indicator, for a dense sustained track. Continuous GPS is
+    // armed in transit either way.
     public var highAccuracyGPS: Bool {
         didSet { highAccuracyGPSDidChange() }
     }
@@ -212,11 +213,11 @@ public final class LocationCoordinator: NSObject {
         if !backgroundUpdatesAvailable {
             log.record("location.backgroundMode", "missing UIBackgroundModes location")
         }
-        // MUST be true: iOS 16.4+ suspends background continuous location when
-        // the indicator is off (esp. with a distanceFilter set and SLC running,
-        // and when updates are started from a background wake). That suspension
-        // is what blacked out the outbound leg of a drive. See setContinuous().
-        self.manager.showsBackgroundLocationIndicator = true
+        // Only with highAccuracyGPS: iOS 16.4+ may suspend background
+        // continuous location when the indicator is off, which is what blacked
+        // out the outbound leg of a drive. Off accepts that for no blue pill.
+        // See applyBackgroundKeepAlive().
+        self.manager.showsBackgroundLocationIndicator = highAccuracyGPS
 
         self.authStatus = manager.authorizationStatus
         self.accuracyStatus = manager.accuracyAuthorization
@@ -421,6 +422,9 @@ public final class LocationCoordinator: NSObject {
         // On = keep every fix (dense); off = thin to the engine's cadence.
         if continuousActive {
             thinMeters = highAccuracyGPS ? 0 : coarseThin
+            applyBackgroundKeepAlive()
+        } else {
+            manager.showsBackgroundLocationIndicator = highAccuracyGPS
         }
     }
 
@@ -880,23 +884,35 @@ extension LocationCoordinator: LocationControlling {
         guard monitoringActive else { return }
         manager.desiredAccuracy = decision.accuracy
         manager.activityType = decision.activityType
-        // Background-safe config: NO numeric distanceFilter (it triggers iOS
-        // background suspension), no auto-pause (the engine owns GPS on/off and
-        // cuts it at the dwell). Thinning is done in software via thinMeters.
+        // NO numeric distanceFilter (it triggers iOS background suspension).
+        // Thinning is done in software via thinMeters.
         manager.distanceFilter = kCLDistanceFilterNone
-        manager.pausesLocationUpdatesAutomatically = false
         coarseThin = decision.distanceFilter
         thinMeters = highAccuracyGPS ? 0 : coarseThin
         lastKeptContinuous = nil
-        // Keep the app alive in the background for the whole transit leg.
-        if endBackgroundActivity == nil {
-            endBackgroundActivity = manager.beginBackgroundActivity()
-        }
+        applyBackgroundKeepAlive()
         if !continuousActive {
             manager.startUpdatingLocation()
             continuousActive = true
         }
-        log.record("engine.gps", "on acc=\(Int(decision.accuracy)) thin=\(Int(thinMeters))m bgSession=on")
+        log.record("engine.gps", "on acc=\(Int(decision.accuracy)) thin=\(Int(thinMeters))m bgSession=\(highAccuracyGPS ? "on" : "off")")
+    }
+
+    /// With highAccuracyGPS the stream is sustained for the whole transit leg:
+    /// no auto-pause (the engine owns GPS on/off and cuts it at the dwell), a
+    /// held background session and the indicator. Without it iOS may pause the
+    /// stream in the background and no blue pill is shown.
+    private func applyBackgroundKeepAlive() {
+        manager.pausesLocationUpdatesAutomatically = !highAccuracyGPS
+        manager.showsBackgroundLocationIndicator = highAccuracyGPS
+        if highAccuracyGPS {
+            if endBackgroundActivity == nil {
+                endBackgroundActivity = manager.beginBackgroundActivity()
+            }
+        } else {
+            endBackgroundActivity?()
+            endBackgroundActivity = nil
+        }
     }
 
     public func stopContinuous() {

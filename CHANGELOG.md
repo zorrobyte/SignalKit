@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `highAccuracyGPS` gates the background keep-alive again. Off (the default): transit GPS lets iOS pause the stream, takes no `CLBackgroundActivitySession`, and sets `showsBackgroundLocationIndicator = false`, so there is no blue location pill; background routes can be sparser. On: the previous sustained config (no auto-pause, a held session, indicator shown). Toggling mid-leg applies immediately.
 - Regenerate `HealthTypeCatalog` from the iOS 27 SDK: adds `heartRateVariabilityRMSSD`, `menopausalState`, and `bleedingAfterMenopause` (212 identifier-based types), guarded by `#available(iOS 27, *)`.
 - `LocationSample` carries optional `nativeVisitArrivalTimestamp` and `nativeVisitDepartureTimestamp` (Unix milliseconds). Both are present only on a `visit-departure` sample produced by a completed `CLVisit` with finite, ordered dates; arrival-only callbacks and engine-inferred closures leave them nil. Older persisted samples decode with both nil.
 - Preserve all six native motion flags, including explicit `unknown`, in Equatable `MotionObservation` snapshots.
